@@ -10,8 +10,6 @@ Te ha pasado que navegas por el portal inmobiliario y te interesa un sector en p
 Esta herramienta se presenta como una clase de fácil uso, requiere que se ejecute en un jupyter.
 Deberemos importarla:
 
-from webscrapper_portal_inmobiliario import *
-
 ```python
 from webscrapper_portal_inmobiliario import *
 ```
