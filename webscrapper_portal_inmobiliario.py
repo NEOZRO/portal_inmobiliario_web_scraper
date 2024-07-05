@@ -9,6 +9,10 @@ from ipyleaflet import Map, DrawControl, TileLayer
 import re
 from IPython.display import display
 
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.service import Service
 
 class WebScraperPortalInmobiliario:
     """
@@ -61,14 +65,16 @@ class WebScraperPortalInmobiliario:
         self.geo_url_main = None
         self.total_number_of_properties = None
         self.df_results = None
+        self.driver = None
+        self.bar_progress_get_data = None
+        self.df_inversion_venta = None
+        self.df_inversion_arriendo = None
 
         self.save_data = save_data
         self.theme = theme
-
-        self.headers_request = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/102.0.0.0 Safari/537.36'}
+        self.webdriver_path = '.\chromedriver.exe'
         self.request_timeout=10
         self.sleep_time = 2 # lower sleep times between requests may produce temporal bans
-        # paid web scraping API's should fix this
 
         self.center_map_coordinates = (-33.4489, -70.6693) # Stgo,Chile
 
@@ -77,13 +83,20 @@ class WebScraperPortalInmobiliario:
 
 
         self.get_uf_today()
+        self.init_webdriver()
         self.map_picker()
 
+    def empty_lists_except_specific(self, keep):
+        """ clear all lists in the class to store new data, except the one to keep [polygon coordinates]"""
+        for attr in self.__dict__:
+            if isinstance(getattr(self, attr), list) and attr != keep:
+                setattr(self, attr, [])
 
 
     def get_uf_today(self):
         """
         return unit of UF of today to make convertion of prices later
+        Sometimes at night the website is  updated with the UF value  of zero, affecting the price convertions
         """
         url_uf = 'https://www.uf-hoy.com/'
         div_id = 'valor_uf'
@@ -98,6 +111,35 @@ class WebScraperPortalInmobiliario:
 
             value = integer + decimals / 100
             self.uf =  value
+
+    def init_webdriver(self):
+        """ initialize chrome webdriver"""
+        chrome_options = Options()
+        chrome_options.add_argument("--headless")  # Ensure GUI is off
+        service = Service(executable_path=self.webdriver_path)
+        self.driver = webdriver.Chrome(options=chrome_options, service=service)
+
+    def webdriver_request(self, url, wait=0):
+        """  request using chrome webdriver"""
+        self.driver.get(url)
+
+        if wait >0:
+            sleep(wait) # WAIT UNTIL PAGE LOAD
+
+        soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+
+        return soup
+    def webdriver_refresh(self, wait=0):
+        """ refresh webdriver page"""
+        sleep(wait)
+        self.driver.refresh()
+        soup = BeautifulSoup(self.driver.page_source, 'html.parser')
+        return soup
+
+    def close_webdriver(self):
+        """ close webdriver session"""
+        self.driver.quit()
+
     def extract_urls_from_main_page_basic(self):
         """
         Extracts single data of houses from all cards in main pages
@@ -112,8 +154,7 @@ class WebScraperPortalInmobiliario:
             else:
                 raise ValueError('tipo de operacion no valido')
 
-            main_response = requests.get(main_url,headers=self.headers_request, timeout=self.request_timeout)
-            self.main_soup = BeautifulSoup(main_response.text,'html.parser')
+            self.main_soup = self.webdriver_request(main_url)
             self.get_layout_cards_containers()
 
         self.get_urls_from_containers()
@@ -126,8 +167,8 @@ class WebScraperPortalInmobiliario:
         :return: number of properties in location
         """
         self.geo_url_main = f"https://www.portalinmobiliario.com/{self.tipo_operacion}/{self.type}/_DisplayType_M_item*location_lat:{min_lat}*{max_lat},lon:{min_lon}*{max_lon}"
-        main_response = requests.get(self.geo_url_main,headers=self.headers_request, timeout=self.request_timeout)
-        soup = BeautifulSoup(main_response.text,'html.parser')
+
+        soup = self.webdriver_request(self.geo_url_main)
         find_header_text = soup.find_all('div',{'class':'ui-search-map-list ui-search-map-list__header'})
         if len(find_header_text) == 0:
             return 0
@@ -155,16 +196,11 @@ class WebScraperPortalInmobiliario:
         n_main_pages = int(np.ceil(self.total_number_of_properties/50))
 
         for i in range(1,n_main_pages+1):
-            print(i)
 
-            url_extra_string = "_Desde_"+str(int(np.floor(i/2) * 100+ 1)) if i>=3 else ""
+            url_extra_string = "_Desde_"+str(int(np.floor((i-1)/2) * 100+ 1)) if i>=3 else ""
             geo_url = f"https://www.portalinmobiliario.com/{self.tipo_operacion}/{self.type}/{url_extra_string}_DisplayType_M_item*location_lat:{min_lat}*{max_lat},lon:{min_lon}*{max_lon}#{i}"
 
-            print(geo_url)
-
-            main_response = requests.get(geo_url,headers=self.headers_request, timeout=self.request_timeout)
-            sleep(self.sleep_time)
-            self.main_soup = BeautifulSoup(main_response.text,'html.parser')
+            self.main_soup = self.webdriver_request(geo_url, wait=4) # pair n_page takes time to update links
             self.get_layout_cards_containers(mode="geo")
 
         self.get_urls_from_containers(mode="geo")
@@ -258,10 +294,9 @@ class WebScraperPortalInmobiliario:
 
             return (integer + decimals / 100) * self.uf
 
-    def get_data_from_table_in_url(self, url):
+    def get_data_from_table_in_url(self):
         """
         looks for table inside urls and extract the needed data
-        :param url: url of real state
         """
         total_dict_proerties = {'Superficie total': np.nan,
         'Superficie útil': np.nan,
@@ -277,21 +312,10 @@ class WebScraperPortalInmobiliario:
         "Estacionamientos": np.nan
                                 }
 
-
-        # loop to get the right page.. from the two that can show up in 'portalinmobiliario'
-        # ONE OF THEM DOESNT HAVE TH INFO NEEDED
-        table_data = None
-        wrong_page = True
-        while wrong_page:
-            try:
-                table_data = pd.read_html(url)[0]
-                sleep(self.sleep_time)
-                wrong_page = False
-            except:
-                continue
+        tbl = self.driver.find_element(By.XPATH, "//table[@class='andes-table']")
+        table_data  = pd.read_html(tbl.get_attribute('outerHTML'))[0]
 
         # extracting dinamic table data into dict
-
         for i,row in table_data.iterrows():
             try:
                 # if numeric data
@@ -350,7 +374,7 @@ class WebScraperPortalInmobiliario:
         get latitude and longitude from soup
         :return: latitude and longitude, list
         """
-        url_text_w_coordenates = soup.find_all('img', {"class":"ui-pdp-image", "decoding":"async"})[-1]["srcset"].split("=")[5]
+        url_text_w_coordenates = soup.find_all('div', {"id":"ui-vip-location__map"})[0].find('img').get('srcset').split("=")[5]
 
         latitud = url_text_w_coordenates.split("%")[0]
         pattern_longitud = r"%2C(.*?)&"  # Pattern to match text between '%2C' and '&'
@@ -376,8 +400,7 @@ class WebScraperPortalInmobiliario:
             lat,lon = self.get_latitud_longitud_from_soup(soup)
             self.latitud.append(lat)
             self.longitud.append(lon)
-            self.get_data_from_table_in_url(url)
-
+            self.get_data_from_table_in_url()
 
     def get_correct_soup_from_url(self,url):
         """
@@ -385,12 +408,10 @@ class WebScraperPortalInmobiliario:
          This function verify if url is correct to extract more data
         :return: return the soup of correct page
         """
-        soup = None
         wrong_page = True
+        soup = self.webdriver_request(url, wait=1)
         while wrong_page:
-            get_url = requests.get(url, headers=self.headers_request, timeout=self.request_timeout)
-            soup = BeautifulSoup(get_url.text, "html.parser")
-            sleep(self.sleep_time)
+            soup = self.webdriver_refresh(wait=self.sleep_time)
             all_h2 = [h2.text for h2 in soup.find_all('h2')]
             # if 'ubication' is in a secondary title (h2). Then its the good page. Continue
             if "Ubicación" in all_h2:
@@ -398,7 +419,7 @@ class WebScraperPortalInmobiliario:
 
         return soup
 
-    def save_results(self):
+    def save_results(self, save_file=True):
         """ save data into a excel file, saved in the same folder of this script"""
 
         dict_df = {
@@ -422,24 +443,60 @@ class WebScraperPortalInmobiliario:
             "link": self.cards_urls}
 
         self.df_results = pd.DataFrame(dict_df)
-        current_time_str = datetime.now().strftime('%H%M_%d_%m_%y')
-        self.df_results.to_excel(f"results_{self.tipo_operacion}_{self.type}_{current_time_str}.xlsx")
+
+        if save_file:
+            current_time_str = datetime.now().strftime('%H%M_%d_%m_%y')
+            self.df_results.to_excel(f"results_{self.tipo_operacion}_{self.type}_{current_time_str}.xlsx")
 
     def handle_draw(self, self_2, action, geo_json):
-        """extract the features  from on_Draw and save into a list"""
+        """internal thread of map picker to run funtions once the selection is completed"""
         # save of picked point
         self.picked_pts_features.append(geo_json)
 
-        self.extract_urls_from_main_page_geo()
+        if self.tipo_operacion=="venta" or self.tipo_operacion=="arriendo":
+            self.extract_urls_from_main_page_geo()
+            WebScraperPortalInmobiliario.update_info_progress_tqdm_bar(self.bar_progress_get_data,
+                                                                       new_len=len(self.cards_urls),
+                                                                       new_text='Obtaining data...')
+            self.get_data_from_urls()
+            self.close_webdriver()
 
-        # # update progress bar
-        WebScraperPortalInmobiliario.update_info_progress_tqdm_bar(self.bar_progress_get_data,
-                                                                   new_len=len(self.cards_urls),
-                                                                   new_text='Obtaining data...')
-        self.get_data_from_urls()
+            if self.save_data:
+                self.save_results()
 
-        if self.save_data:
-            self.save_results()
+        elif self.tipo_operacion=="inversion":
+
+            current_time_str = datetime.now().strftime('%H%M_%d_%m_%y')
+            # ARRIENDO
+            self.tipo_operacion = "arriendo"
+            self.extract_urls_from_main_page_geo()
+            WebScraperPortalInmobiliario.update_info_progress_tqdm_bar(self.bar_progress_get_data,
+                                                                       new_len=len(self.cards_urls),
+                                                                       new_text='Arriendo: Obtaining data...')
+            self.get_data_from_urls()
+            self.save_results(save_file=False)
+            self.df_inversion_arriendo = self.df_results
+            self.df_inversion_arriendo.to_excel(f"results_invesment_{self.tipo_operacion}_{self.type}_{current_time_str}.xlsx")
+
+
+        # VENTA
+            self.tipo_operacion = "venta"
+            self.empty_lists_except_specific("picked_pts_features")
+
+            self.extract_urls_from_main_page_geo()
+            WebScraperPortalInmobiliario.update_info_progress_tqdm_bar(self.bar_progress_get_data,
+                                                                       new_len=len(self.cards_urls),
+                                                                       new_text='Venta: Obtaining data...')
+            self.get_data_from_urls()
+
+            self.close_webdriver()
+            self.save_results(save_file=False)
+            self.df_inversion_venta = self.df_results
+            self.df_inversion_venta.to_excel(f"results_invesment_{self.tipo_operacion}_{self.type}_{current_time_str}.xlsx")
+
+
+        else:
+            raise ValueError("Type must be 'inversion', 'venta' or 'arriendo'")
 
     @staticmethod
     def update_info_progress_tqdm_bar(bar, new_len, new_text):
@@ -484,8 +541,6 @@ class WebScraperPortalInmobiliario:
         elif self.theme=="white":
             self.main_interactive_map = Map(layers=[white_map_layer,], center=self.center_map_coordinates, zoom=13)
 
-
-        # self.main_interactive_map = Map(center=self.center_map_coordinates, zoom=13)
 
         draw_control = DrawControl()
 

@@ -34,12 +34,19 @@ WSPI = WebScraperPortalInmobiliario(tipo_operacion="venta",
 Elegimos utilizando la selección poligonal:
 ![Alt text](readme_images/portal_inmobiliario_3.png "Optional title")
 
-El único inconveniente es que el portal toma medidas contra los webscrapper, como asignar aleatoriamente páginas con menos información u banear temporalmente la ip si se hacen muchas request. Para ello se tiene un periodo entre request bastante relajado para no saturar los servidores y hacer la obtención de información amigable
 
-Los resultados quedan dentro de la clase como df_results, siendo ahora posible un sinfín de cálculos e insights que podrían ayudarnos a tomar una mejor decisión a la hora de invertir.
-Como proyecto futuro pretendo que se calcule la mejor propiedad del sector según métricas de tasa de capitalización usando la comparación entre arriendo y venta.
+Los resultados quedan dentro de la clase como df_results, siendo ahora posible un sinfín de cálculos e insights que 
+podrían ayudarnos a tomar una mejor decisión a la hora de invertir.
 
 ![Alt text](readme_images/portal_inmobiliario_6.png "Optional title")
+
+
+## La propiedad mas rentable del sector
+
+todo:
+- obtener df ventas y arriendos del mismo sector
+- Obtener los CAPRATE de cada casa segun sus propiedades
+
 
 
 
