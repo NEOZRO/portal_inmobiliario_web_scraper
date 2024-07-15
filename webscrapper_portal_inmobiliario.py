@@ -8,6 +8,8 @@ from datetime import datetime
 from ipyleaflet import Map, DrawControl, TileLayer
 import re
 from IPython.display import display
+import os
+import json
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
@@ -24,12 +26,11 @@ class WebScraperPortalInmobiliario:
     https://www.portalinmobiliario.com/
     :param tipo_operacion: select one -> ["arriendo","venta"]
     :param tipo_inmueble: select one -> ["casa","departamento"]
-    :param save_data: Bolean -> excel created from results and  saved in this file path
     :param theme: select one -> ["dark","default","white"]
     :return: df_results, xlsx file (optional)
 
     """
-    def __init__(self,tipo_operacion,tipo_inmueble, save_data=True, theme="default"):
+    def __init__(self,tipo_operacion,tipo_inmueble, theme="default",folder_save_name:str=None):
 
         self.longitud = []
         self.latitud = []
@@ -69,8 +70,9 @@ class WebScraperPortalInmobiliario:
         self.bar_progress_get_data = None
         self.df_inversion_venta = None
         self.df_inversion_arriendo = None
+        self.full_path = None
 
-        self.save_data = save_data
+        self.current_time_str = datetime.now().strftime('%H%M_%d_%m_%y')
         self.theme = theme
         self.webdriver_path = '.\chromedriver.exe'
         self.request_timeout=10
@@ -81,10 +83,23 @@ class WebScraperPortalInmobiliario:
         self.tipo_operacion = tipo_operacion
         self.type=tipo_inmueble
 
+        if not isinstance(folder_save_name, str):
+            raise ValueError("folder_save_name must be a string")
+
+        self.folder_save_name = folder_save_name
+        self.create_results_folder()
 
         self.get_uf_today()
         self.init_webdriver()
-        self.map_picker()
+
+        # if is already a folder with a poly selection. just download the new data of the location
+        self.json_polygon_path = os.path.join(self.full_path, f'{self.folder_save_name}.json') # NOQA
+        if not os.path.exists(self.json_polygon_path):
+            self.map_picker()
+        else:
+            self.load_json_polygon_selection()
+            self.bar_progress_get_data = tqdm(total=100, desc=f"UPDATING data for location found in {self.folder_save_name}")
+            self.execute_main_process()
 
     def empty_lists_except_specific(self, keep):
         """ clear all lists in the class to store new data, except the one to keep [polygon coordinates]"""
@@ -418,10 +433,8 @@ class WebScraperPortalInmobiliario:
                 wrong_page = False
 
         return soup
-
-    def save_results(self, save_file=True):
-        """ save data into a excel file, saved in the same folder of this script"""
-
+    def compile_results_df(self):
+        """ generate the final dataframe of results"""
         dict_df = {
             "titulo": self.title,
             "precio":self.precios,
@@ -444,16 +457,42 @@ class WebScraperPortalInmobiliario:
 
         self.df_results = pd.DataFrame(dict_df)
 
-        if save_file:
-            current_time_str = datetime.now().strftime('%H%M_%d_%m_%y')
-            self.df_results.to_excel(f"results_{self.tipo_operacion}_{self.type}_{current_time_str}.xlsx")
+    def save_results(self, filename):
+        """ save data into a excel file, saved in the same folder of this script"""
 
-    def handle_draw(self, self_2, action, geo_json):
-        """internal thread of map picker to run funtions once the selection is completed"""
-        # save of picked point
-        self.picked_pts_features.append(geo_json)
+        path_save = os.path.join(self.full_path, filename)
+        self.df_results.to_excel(path_save)
 
+    def create_results_folder(self):
+        """ create folder for results """
+        if not os.path.exists("results"):
+            os.makedirs("results")
+
+        self.full_path  = os.path.join("results", self.folder_save_name)
+        if not os.path.exists(self.full_path):
+            os.makedirs(self.full_path)
+
+    def save_visualization_map_polygon_selection(self):
+        """ save map selection as html visualization """
+        path_save = os.path.join(self.full_path, f'{self.folder_save_name}.html')
+        self.main_interactive_map.save(path_save)
+
+    def save_json_polygon_selection(self):
+        """ save map selection as json """
+        path_save = os.path.join(self.full_path, f'{self.folder_save_name}.json')
+        with open(path_save, 'w') as json_file:
+            json.dump(self.picked_pts_features[0], json_file)
+
+    def load_json_polygon_selection(self):
+        """ load map selection as json """
+        path_load = self.json_polygon_path
+        with open(path_load, 'r') as json_file:
+            self.picked_pts_features = [json.load(json_file)]
+
+    def execute_main_process(self):
+        """ main process"""
         if self.tipo_operacion=="venta" or self.tipo_operacion=="arriendo":
+
             self.extract_urls_from_main_page_geo()
             WebScraperPortalInmobiliario.update_info_progress_tqdm_bar(self.bar_progress_get_data,
                                                                        new_len=len(self.cards_urls),
@@ -461,12 +500,11 @@ class WebScraperPortalInmobiliario:
             self.get_data_from_urls()
             self.close_webdriver()
 
-            if self.save_data:
-                self.save_results()
+            self.compile_results_df()
+            self.save_results(filename=f"results_{self.tipo_operacion}_{self.type}_{self.current_time_str}.xlsx")
 
         elif self.tipo_operacion=="inversion":
 
-            current_time_str = datetime.now().strftime('%H%M_%d_%m_%y')
             # ARRIENDO
             self.tipo_operacion = "arriendo"
             self.extract_urls_from_main_page_geo()
@@ -474,12 +512,10 @@ class WebScraperPortalInmobiliario:
                                                                        new_len=len(self.cards_urls),
                                                                        new_text='Arriendo: Obtaining data...')
             self.get_data_from_urls()
-            self.save_results(save_file=False)
-            self.df_inversion_arriendo = self.df_results
-            self.df_inversion_arriendo.to_excel(f"results_invesment_{self.tipo_operacion}_{self.type}_{current_time_str}.xlsx")
+            self.compile_results_df()
+            self.save_results(filename=f"results_invesment_{self.tipo_operacion}_{self.type}_{self.current_time_str}.xlsx")
 
-
-        # VENTA
+            # VENTA
             self.tipo_operacion = "venta"
             self.empty_lists_except_specific("picked_pts_features")
 
@@ -490,13 +526,21 @@ class WebScraperPortalInmobiliario:
             self.get_data_from_urls()
 
             self.close_webdriver()
-            self.save_results(save_file=False)
-            self.df_inversion_venta = self.df_results
-            self.df_inversion_venta.to_excel(f"results_invesment_{self.tipo_operacion}_{self.type}_{current_time_str}.xlsx")
-
+            self.compile_results_df()
+            self.save_results(filename=f"results_invesment_{self.tipo_operacion}_{self.type}_{self.current_time_str}.xlsx")
 
         else:
             raise ValueError("Type must be 'inversion', 'venta' or 'arriendo'")
+
+
+
+    def handle_draw(self, self_2, action, geo_json):
+        """internal thread of map picker to run funtions once the selection is completed"""
+        # save of picked point
+        self.picked_pts_features.append(geo_json)
+        self.save_json_polygon_selection()
+        self.execute_main_process()
+        self.save_visualization_map_polygon_selection()
 
     @staticmethod
     def update_info_progress_tqdm_bar(bar, new_len, new_text):
@@ -555,6 +599,7 @@ if __name__ == "__main__":
     # execute on jupyter only because of the dinamic map
     WebScraperPortalInmobiliario(tipo_operacion="venta",
                                  tipo_inmueble="casa",
-                                 save_data=True,
-                                 theme="default")
+                                 theme="default",
+                                 folder_save_name="test"
+                                 )
 
