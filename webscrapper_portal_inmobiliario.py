@@ -327,17 +327,17 @@ class WebScraperPortalInmobiliario:
         looks for table inside urls and extract the needed data
         """
         total_dict_proerties = {'Superficie total': np.nan,
-        'Superficie útil': np.nan,
-        'Dormitorios': np.nan,
-        'Baños': np.nan,
-        'Bodegas': np.nan,
-        'Cantidad de pisos': np.nan,
-        'Tipo de inmueble': np.nan,
-        'Orientación': np.nan,
-        'Antigüedad': np.nan,
-        'Gastos comunes': np.nan,
-        "Número de piso de la unidad": np.nan,
-        "Estacionamientos": np.nan
+                                'Superficie útil': np.nan,
+                                'Dormitorios': np.nan,
+                                'Baños': np.nan,
+                                'Bodegas': np.nan,
+                                'Cantidad de pisos': np.nan,
+                                'Tipo de inmueble': np.nan,
+                                'Orientación': np.nan,
+                                'Antigüedad': np.nan,
+                                'Gastos comunes': np.nan,
+                                "Número de piso de la unidad": np.nan,
+                                "Estacionamientos": np.nan
                                 }
 
         tbl = self.driver.find_element(By.XPATH, "//table[@class='andes-table']")
@@ -347,21 +347,24 @@ class WebScraperPortalInmobiliario:
 
         # extracting dinamic table data into dict
         for i,row in table_data.iterrows():
-            try:
-                # if numeric data
-                if row.loc[1].split(" ")[0].replace(".","").isnumeric():
-                    total_dict_proerties[row.loc[0]] = int(row.loc[1].split(" ")[0].replace(".",""))
-                # if string
-                else:
-                    total_dict_proerties[row.loc[0]] = row.loc[1]
+            numeric_bool = row.loc[1].isdigit()
+            if not numeric_bool: # if not numeric elements in row
+                elements = row.loc[1].split(" ")
 
                 # if string, tipo inmueble
-                if row.loc[0] == "Tipo de casa" or row.loc[0] == "Tipo de apartamento":
+                if row.loc[0] == "Tipo de casa" or row.loc[0] == "Tipo de departamento":
                     total_dict_proerties["Tipo de inmueble"] = row.loc[1]
 
-            except:
-                # in case of errors
-                total_dict_proerties[row.loc[0]] = np.nan
+                elif len(elements)>1:
+                    type_data = elements[1]
+                    if type_data=="m²": # squared meters
+                        total_dict_proerties[row.loc[0]] = float(row.loc[1].split(" ")[0])
+                    else: # int
+                        total_dict_proerties[row.loc[0]] = int(row.loc[1].split(" ")[0].replace(".",""))
+                else: #  strings, without spaces
+                    total_dict_proerties[row.loc[0]] = row.loc[1]
+            else: #just numeric values
+                total_dict_proerties[row.loc[0]] = int(row.loc[1])
 
         # saving into the global list to later form the dataframe
         self.superficie_total.append(total_dict_proerties["Superficie total"])
