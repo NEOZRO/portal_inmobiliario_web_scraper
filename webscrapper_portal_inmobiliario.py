@@ -35,6 +35,7 @@ class WebScraperPortalInmobiliario:
     """
     def __init__(self,tipo_operacion,tipo_inmueble, theme="default",folder_save_name:str=None):
 
+        self.wea = []
         self.longitud = []
         self.latitud = []
         self.dias_desde_publicacion = []
@@ -42,7 +43,7 @@ class WebScraperPortalInmobiliario:
         self.GC = []
         self.antiguedad = []
         self.orientacion = []
-        self.tipo_casa = []
+        self.tipo_inmueble = []
         self.cantidad_pisos = []
         self.bodegas = []
         self.estacionamientos = []
@@ -331,7 +332,7 @@ class WebScraperPortalInmobiliario:
         'Baños': np.nan,
         'Bodegas': np.nan,
         'Cantidad de pisos': np.nan,
-        'Tipo de casa': np.nan,
+        'Tipo de inmueble': np.nan,
         'Orientación': np.nan,
         'Antigüedad': np.nan,
         'Gastos comunes': np.nan,
@@ -342,6 +343,8 @@ class WebScraperPortalInmobiliario:
         tbl = self.driver.find_element(By.XPATH, "//table[@class='andes-table']")
         table_data  = pd.read_html(tbl.get_attribute('outerHTML'))[0]
 
+        self.wea.append(table_data)
+
         # extracting dinamic table data into dict
         for i,row in table_data.iterrows():
             try:
@@ -351,6 +354,11 @@ class WebScraperPortalInmobiliario:
                 # if string
                 else:
                     total_dict_proerties[row.loc[0]] = row.loc[1]
+
+                # if string, tipo inmueble
+                if row.loc[0] == "Tipo de casa" or row.loc[0] == "Tipo de apartamento":
+                    total_dict_proerties["Tipo de inmueble"] = row.loc[1]
+
             except:
                 # in case of errors
                 total_dict_proerties[row.loc[0]] = np.nan
@@ -364,7 +372,7 @@ class WebScraperPortalInmobiliario:
         self.bodegas.append(total_dict_proerties["Bodegas"])
         self.cantidad_pisos.append(total_dict_proerties["Cantidad de pisos"])
         self.piso_unidad.append(total_dict_proerties["Número de piso de la unidad"])
-        self.tipo_casa.append(total_dict_proerties["Tipo de casa"])
+        self.tipo_inmueble.append(total_dict_proerties["Tipo de inmueble"])
         self.orientacion.append(total_dict_proerties["Orientación"])
         self.antiguedad.append(total_dict_proerties["Antigüedad"])
         self.GC.append(total_dict_proerties["Gastos comunes"])
@@ -476,23 +484,24 @@ class WebScraperPortalInmobiliario:
     def compile_results_df(self):
         """ generate the final dataframe of results"""
         dict_df = {
-            "titulo": self.title,
+            "latitud":self.latitud,
+            "longitud":self.longitud,
             "precio":self.precios,
-            "ubicacion":self.ubicacion,
+            "precio_UF" : np.asarray(self.precios)/self.uf,
+            "dias_desde_publicacion":self.dias_desde_publicacion,
             "n_dormitorios":self.n_dormitorios,
             "n_banos":self.n_banos,
             "superficie_total": self.superficie_total,
             "superficie_util": self.superficie_util,
-            "latitud":self.latitud,
-            "longitud":self.longitud,
-            "dias_desde_publicacion":self.dias_desde_publicacion,
             "estacionamientos": self.estacionamientos,
             "bodegas":self.bodegas,
+            "antiguedad":self.antiguedad,
             "cantidad_pisos_edificio":self.cantidad_pisos,
             "piso_unidad":self.piso_unidad,
-            "tipo_casa":self.tipo_casa,
+            "tipo_inmueble":self.tipo_inmueble,
             "orientacion":self.orientacion,
-            "antiguedad":self.antiguedad,
+            "titulo": self.title,
+            "ubicacion":self.ubicacion,
             "link": self.cards_urls}
 
         self.df_results = pd.DataFrame(dict_df)
