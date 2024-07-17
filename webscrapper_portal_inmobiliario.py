@@ -5,7 +5,7 @@ from time import sleep
 import numpy as np
 import pandas as pd
 from datetime import datetime
-from ipyleaflet import Map, DrawControl, TileLayer
+from ipyleaflet import Map, DrawControl, TileLayer,GeoJSON
 import re
 from IPython.display import display
 import os
@@ -15,6 +15,9 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
+
+from logs import  log_msg
+
 
 class WebScraperPortalInmobiliario:
     """
@@ -71,6 +74,8 @@ class WebScraperPortalInmobiliario:
         self.df_inversion_venta = None
         self.df_inversion_arriendo = None
         self.full_path = None
+        self.current_url = None
+        self.last_soup_debug=None
 
         self.current_time_str = datetime.now().strftime('%H%M_%d_%m_%y')
         self.theme = theme
@@ -97,9 +102,14 @@ class WebScraperPortalInmobiliario:
         if not os.path.exists(self.json_polygon_path):
             self.map_picker()
         else:
-            self.load_json_polygon_selection()
-            self.bar_progress_get_data = tqdm(total=100, desc=f"UPDATING data for location found in {self.folder_save_name}")
-            self.execute_main_process()
+            try:
+                self.load_json_polygon_selection()
+                self.bar_progress_get_data = tqdm(total=100, desc=f"UPDATING data for location found in {self.folder_save_name}")
+                self.execute_main_process()
+
+            except Exception as e:
+                self.bar_progress_get_data.set_description("Error, please check log file   ")
+                log_msg(exception=e,path= self.full_path, url=self.current_url)
 
     def empty_lists_except_specific(self, keep):
         """ clear all lists in the class to store new data, except the one to keep [polygon coordinates]"""
@@ -215,7 +225,9 @@ class WebScraperPortalInmobiliario:
             url_extra_string = "_Desde_"+str(int(np.floor((i-1)/2) * 100+ 1)) if i>=3 else ""
             geo_url = f"https://www.portalinmobiliario.com/{self.tipo_operacion}/{self.type}/{url_extra_string}_DisplayType_M_item*location_lat:{min_lat}*{max_lat},lon:{min_lon}*{max_lon}#{i}"
 
+            self.current_url = geo_url
             self.main_soup = self.webdriver_request(geo_url, wait=4) # pair n_page takes time to update links
+            self.last_soup_debug = self.main_soup
             self.get_layout_cards_containers(mode="geo")
 
         self.get_urls_from_containers(mode="geo")
@@ -364,15 +376,41 @@ class WebScraperPortalInmobiliario:
         :return: number of days, int
         """
         multiplier = 1
-        # normal page
-        try:
-            period = soup.find_all("p","ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-header__bottom-subtitle")[0].text.split(" ")[3]
-            quantity = int(soup.find_all("p","ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-header__bottom-subtitle")[0].text.split(" ")[2])
 
-        # page of verified publishers
-        except:
-            period =soup.find_all("p","ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-seller-validated__title")[0].text.split(" ")[3]
-            quantity=int(soup.find_all("p","ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-seller-validated__title")[0].text.split(" ")[2])
+        # verified_publishers = soup.find_all(string="identidad verificada")
+        publicado_hoy = soup.find_all(string="Publicado hoy")
+        list_grabbers_publications_days = ["ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-header__bottom-subtitle",
+                                           "ui-pdp-background-color--WHITE ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-header__bottom-subtitle",
+                                           "ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-seller-validated__title"]
+        index_grabber = 0
+        if publicado_hoy:
+            period="dia"
+            quantity=1
+        else:
+            # get the line with the days since publication, it has multiles formats
+            while True:
+                days_publication_line = soup.find_all("p",list_grabbers_publications_days[index_grabber])
+
+                if days_publication_line or index_grabber > len(list_grabbers_publications_days):
+                    period =days_publication_line[0].text.split(" ")[3]
+                    quantity=int(days_publication_line[0].text.split(" ")[2])
+                    break
+                else:
+                    index_grabber+=1
+
+    # # normal page
+    #     try:
+    #         print("NORMAL_PAGE")
+    #         period = soup.find_all("p","ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-header__bottom-subtitle")[0].text.split(" ")[3]
+    #         quantity = int(soup.find_all("p","ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-header__bottom-subtitle")[0].text.split(" ")[2])
+    #
+    #     # page of verified publishers
+    #     except:
+    #         print("verified publishers")
+    #         period =soup.find_all("p","ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-seller-validated__title")[0].text.split(" ")[3]
+    #         print(period)
+    #         quantity=int(soup.find_all("p","ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-seller-validated__title")[0].text.split(" ")[2])
+    #         print(quantity)
 
         if period=="meses" or period=="mes":
             multiplier = 30
@@ -405,8 +443,10 @@ class WebScraperPortalInmobiliario:
 
         for url in self.cards_urls:
             self.bar_progress_get_data.update(1)
+            self.current_url = url
 
             soup = self.get_correct_soup_from_url(url)
+            self.last_soup_debug = soup
 
             self.title.append(soup.find_all("h1","ui-pdp-title")[0].text)
             self.precios.append(self.get_price_from_soup(soup))
@@ -475,7 +515,20 @@ class WebScraperPortalInmobiliario:
     def save_visualization_map_polygon_selection(self):
         """ save map selection as html visualization """
         path_save = os.path.join(self.full_path, f'{self.folder_save_name}.html')
-        self.main_interactive_map.save(path_save)
+        path_load = self.json_polygon_path
+        with open(path_load, 'r') as json_file:
+            data = json.load(json_file)
+
+        geo_json = GeoJSON(data=data)
+        polygon_coordinates_array = np.asarray(data["geometry"]["coordinates"][0])
+
+        map_to_save = self.init_map_ipyflet(theme=self.theme,
+                                            center_map_cordinates=(np.mean(polygon_coordinates_array[:,1]),
+                                                                   np.mean(polygon_coordinates_array[:,0])),
+                                            zoom=14)
+
+        map_to_save.add(geo_json)
+        map_to_save.save(path_save)
 
     def save_json_polygon_selection(self):
         """ save map selection as json """
@@ -494,6 +547,7 @@ class WebScraperPortalInmobiliario:
         if self.tipo_operacion=="venta" or self.tipo_operacion=="arriendo":
 
             self.extract_urls_from_main_page_geo()
+
             WebScraperPortalInmobiliario.update_info_progress_tqdm_bar(self.bar_progress_get_data,
                                                                        new_len=len(self.cards_urls),
                                                                        new_text='Obtaining data...')
@@ -530,17 +584,24 @@ class WebScraperPortalInmobiliario:
             self.save_results(filename=f"results_invesment_{self.tipo_operacion}_{self.type}_{self.current_time_str}.xlsx")
 
         else:
+
+            self.bar_progress_get_data.set_description("Error")
             raise ValueError("Type must be 'inversion', 'venta' or 'arriendo'")
 
-
+        self.bar_progress_get_data.set_description("completed!   ")
 
     def handle_draw(self, self_2, action, geo_json):
         """internal thread of map picker to run funtions once the selection is completed"""
-        # save of picked point
-        self.picked_pts_features.append(geo_json)
-        self.save_json_polygon_selection()
-        self.execute_main_process()
-        self.save_visualization_map_polygon_selection()
+        try:
+            # save of picked point
+            self.picked_pts_features.append(geo_json)
+            self.save_json_polygon_selection()
+            self.execute_main_process()
+            self.save_visualization_map_polygon_selection()
+
+        except Exception as e:
+            self.bar_progress_get_data.set_description("Error, please check log file   ")
+            log_msg(exception=e,path= self.full_path, url=self.current_url)
 
     @staticmethod
     def update_info_progress_tqdm_bar(bar, new_len, new_text):
@@ -556,11 +617,8 @@ class WebScraperPortalInmobiliario:
         bar.refresh()
 
 
-    def map_picker(self):
-        """
-        allows the user to pick from global map a location to search in
-        more themes: https://wiki.openstreetmap.org/wiki/Raster_tile_providers
-        """
+    def init_map_ipyflet(self,center_map_cordinates, theme="default", zoom=13):
+        """ init Map from ipyfleet based con configurations"""
 
         dark_map_layer = TileLayer(
             url="https://tiles.stadiamaps.com/tiles/alidade_smooth_dark/{z}/{x}/{y}.png	",
@@ -573,26 +631,37 @@ class WebScraperPortalInmobiliario:
             attribution='&copy; <a href="https://carto.com/">Carto</a>',
             name='white'
         )
+        map = None
 
-        if self.theme=="dark":
+        if theme == "dark":
 
-            self.main_interactive_map = Map(layers=[dark_map_layer,], center=self.center_map_coordinates, zoom=13)
+            map = Map(layers=[dark_map_layer,], center=center_map_cordinates, zoom=zoom)
 
-        elif self.theme=="default":
+        elif theme == "default":
 
-            self.main_interactive_map = Map(center=self.center_map_coordinates, zoom=13)
+            map = Map(center=center_map_cordinates, zoom=zoom)
 
-        elif self.theme=="white":
-            self.main_interactive_map = Map(layers=[white_map_layer,], center=self.center_map_coordinates, zoom=13)
+        elif theme == "white":
+            map = Map(layers=[white_map_layer,], center=center_map_cordinates, zoom=zoom)
 
+        return map
 
-        draw_control = DrawControl()
+    def map_picker(self):
+            """
+            allows the user to pick from global map a location to search in
+            more themes: https://wiki.openstreetmap.org/wiki/Raster_tile_providers
+            """
+            self.main_interactive_map = self.init_map_ipyflet(theme=self.theme,
+                                                              center_map_cordinates=self.center_map_coordinates)
 
-        draw_control.on_draw(self.handle_draw)
+            draw_control = DrawControl()
 
-        self.main_interactive_map.add(draw_control)
-        display(self.main_interactive_map) # NOQA
-        self.bar_progress_get_data = tqdm(total=100, desc="SELECT REGION TO ANALYZE ...")
+            draw_control.on_draw(self.handle_draw)
+
+            self.main_interactive_map.add(draw_control)
+            display(self.main_interactive_map) # NOQA
+
+            self.bar_progress_get_data = tqdm(total=100, desc="SELECT REGION TO ANALYZE ...")
 
 if __name__ == "__main__":
 
