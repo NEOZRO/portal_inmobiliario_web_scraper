@@ -81,7 +81,6 @@ class WebScraperPortalInmobiliario:
         self.current_time_str = datetime.now().strftime('%H%M_%d_%m_%y')
         self.theme = theme
         self.webdriver_path = '.\chromedriver.exe'
-        self.request_timeout=10
         self.sleep_time = 2 # lower sleep times between requests may produce temporal bans
 
         self.center_map_coordinates = (-33.4489, -70.6693) # Stgo,Chile
@@ -347,24 +346,19 @@ class WebScraperPortalInmobiliario:
 
         # extracting dinamic table data into dict
         for i,row in table_data.iterrows():
-            numeric_bool = row.loc[1].isdigit()
-            if not numeric_bool: # if not numeric elements in row
-                elements = row.loc[1].split(" ")
 
-                # if string, tipo inmueble
-                if row.loc[0] == "Tipo de casa" or row.loc[0] == "Tipo de departamento":
-                    total_dict_proerties["Tipo de inmueble"] = row.loc[1]
+            if row.loc[0] == "Tipo de casa" or row.loc[0] == "Tipo de departamento":
+                total_dict_proerties["Tipo de inmueble"] = row.loc[1]
 
-                elif len(elements)>1:
-                    type_data = elements[1]
-                    if type_data=="m²": # squared meters
-                        total_dict_proerties[row.loc[0]] = float(row.loc[1].split(" ")[0])
-                    else: # int
-                        total_dict_proerties[row.loc[0]] = int(row.loc[1].split(" ")[0].replace(".",""))
-                else: #  strings, without spaces
-                    total_dict_proerties[row.loc[0]] = row.loc[1]
-            else: #just numeric values
-                total_dict_proerties[row.loc[0]] = int(row.loc[1])
+            elif row.loc[0] in ["Superficie total","Superficie útil"]:
+                total_dict_proerties[row.loc[0]] = float(row.loc[1].split(" ")[0])
+
+            elif row.loc[0] in ["orientacion"]:
+                total_dict_proerties[row.loc[0]] = str(row.loc[1])
+
+            elif row.loc[0] in ["Dormitorios","Baños","Estacionamientos","Bodegas","Cantidad de pisos",
+                                "Número de piso de la unidad","Antigüedad","Gastos comunes"]:
+                total_dict_proerties[row.loc[0]] = int(row.loc[1].split(" ")[0].replace(".",""))
 
         # saving into the global list to later form the dataframe
         self.superficie_total.append(total_dict_proerties["Superficie total"])
@@ -390,6 +384,8 @@ class WebScraperPortalInmobiliario:
 
         # verified_publishers = soup.find_all(string="identidad verificada")
         publicado_hoy = soup.find_all(string="Publicado hoy")
+        publicado_this_week = soup.find_all(string="Publicado esta semana")
+
         list_grabbers_publications_days = ["ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-header__bottom-subtitle",
                                            "ui-pdp-background-color--WHITE ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-header__bottom-subtitle",
                                            "ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-seller-validated__title"]
@@ -397,6 +393,9 @@ class WebScraperPortalInmobiliario:
         if publicado_hoy:
             period="dia"
             quantity=1
+        elif publicado_this_week:
+            period="dia"
+            quantity=7
         else:
             # get the line with the days since publication, it has multiles formats
             while True:
