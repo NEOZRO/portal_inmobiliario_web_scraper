@@ -17,7 +17,7 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 
 from logs import  log_msg
-
+from database import create_db_connection, create_table, insert_price_history
 
 class WebScraperPortalInmobiliario:
     """

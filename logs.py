@@ -24,7 +24,3 @@ def log_msg(exception, path, url):
     with open((os.path.join(path, "log.txt")), "a", encoding="utf-8") as logFile:
 
         logFile.write(msg)
-
-
-
-
