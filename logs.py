@@ -4,7 +4,7 @@ from datetime import datetime
 import traceback
 
 
-def log_msg(exception, path, url):
+def log_msg_txt(exception, path, url):
     """Para tener un archivo/log que registre los procesos
     :param msg: mensaje que se guardará
 
@@ -24,3 +24,10 @@ def log_msg(exception, path, url):
     with open((os.path.join(path, "log.txt")), "a", encoding="utf-8") as logFile:
 
         logFile.write(msg)
+
+def log_exception_str(exception):
+    """prepara el texto de la excepcion"""
+    tracebacks_msg = '\n'.join(traceback.format_exception(None, exception, exception.__traceback__))
+    error_msg = f"\nError: {exception} \n {tracebacks_msg}"
+
+    return error_msg

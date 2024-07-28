@@ -1,7 +1,7 @@
 from datetime import datetime
 import sqlite3
 import pandas as pd
-
+import os
 
 def create_db_connection(db_file):
     """Create a database connection to the SQLite database specified by db_file"""
@@ -21,30 +21,40 @@ def create_table(conn, create_table_sql):
     except Exception as e:
         print(e)
 
-def insert_property(conn, property):
-    sql = ''' INSERT INTO properties(Latitude, Longitude ,
-                                        dias_desde_publicacion ,
-                                        n_dormitorios ,
-                                        n_banos ,
-                                        superficie_total ,
-                                        superficie_util ,
-                                        estacionamientos ,
-                                        bodegas ,
-                                        antiguedad ,
-                                        cantidad_pisos_edificio ,
-                                        piso_unidad ,
-                                        tipo_inmueble ,
-                                        orientacion ,
-                                        titulo ,
-                                        ubicacion ,
-                                        link ,
-                                        geo_ref_name)VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) 
-              '''
+def insert_or_update_property(conn, property):
+    """Inserts property data into the database"""
+
+    sql = ''' INSERT INTO properties (Latitude, Longitude, 
+                                      dias_desde_publicacion, 
+                                      n_dormitorios, 
+                                      n_banos, 
+                                      superficie_total, 
+                                      superficie_util, 
+                                      estacionamientos, 
+                                      bodegas, 
+                                      antiguedad, 
+                                      cantidad_pisos_edificio, 
+                                      piso_unidad, 
+                                      tipo_inmueble, 
+                                      orientacion, 
+                                      titulo, 
+                                      ubicacion, 
+                                      link, 
+                                      geo_ref_name, 
+                                      listed)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ON CONFLICT (Latitude, Longitude) DO UPDATE SET
+                  dias_desde_publicacion = EXCLUDED.dias_desde_publicacion,
+                  link = EXCLUDED.link,
+                  listed = EXCLUDED.listed
+
+          '''
     cur = conn.cursor()
     cur.execute(sql, property)
     conn.commit()
 
 def insert_price_history(conn, latitude, longitude, price,Price_UF,tipo_operacion, date):
+    """Inserts price history data into the database"""
     sql = ''' INSERT INTO price_history(Latitude, Longitude, Price, Price_UF,tipo_operacion, Date)
               VALUES(?,?,?,?,?,?) 
               '''
@@ -53,6 +63,7 @@ def insert_price_history(conn, latitude, longitude, price,Price_UF,tipo_operacio
     conn.commit()
 
 def get_price_history(conn, latitude, longitude):
+    """Fetches price history data from the database"""
     sql = "SELECT * FROM price_history WHERE Latitude=? AND Longitude=?"
     cur = conn.cursor()
     cur.execute(sql, (latitude, longitude))
@@ -65,19 +76,11 @@ def get_joined_data_as_dataframe(conn,threshold_date):
     Fetches the join of properties and price_history tables from the database
     and returns it as a pandas DataFrame.
     """
-    # SQL query to join properties and price_history tables
-    # join_query = """
-    # SELECT *
-    # FROM properties
-    # JOIN price_history ON properties.Latitude = price_history.Latitude AND properties.Longitude = price_history.Longitude
-    # """
-
-    # Adjusted SQL query to include the date condition
     join_query = f"""
     SELECT properties.*, price_history.Price, price_history.Price_UF, price_history.tipo_operacion, price_history.Date
     FROM properties
     JOIN price_history ON properties.Latitude = price_history.Latitude AND properties.Longitude = price_history.Longitude
-    WHERE price_history.Date >= '{threshold_date}'
+    WHERE price_history.Date > '{threshold_date}'
     """
 
 
@@ -89,72 +92,92 @@ def get_joined_data_as_dataframe(conn,threshold_date):
         print(e)
         return None
     finally:
-        # Ensure the connection is closed after the operation
         conn.close()
 
+def delist_all_properties(conn):
+    """ mark all properties as not listed"""
+
+    sql_query = f"""
+    UPDATE properties
+     SET listed = false;
+    """
+    cur = conn.cursor()
+    cur.execute(sql_query)
+    conn.commit()
 
 
-def main():
-    database = "real_estate.db"
+def insert_error_log(conn, geo_ref_name, Date,link,exception_print, solved_status):
+    """ isert a log error into the log table"""
 
-    sql_create_properties_table = """ CREATE TABLE IF NOT EXISTS properties (
-                                        Latitude REAL NOT NULL,
-                                        Longitude REAL NOT NULL,
-                                        dias_desde_publicacion REAL NOT NULL,
-                                        n_dormitorios REAL NOT NULL,
-                                        n_banos REAL NOT NULL,
-                                        superficie_total REAL NOT NULL,
-                                        superficie_util REAL NOT NULL,
-                                        estacionamientos REAL NOT NULL,
-                                        bodegas REAL NOT NULL,
-                                        antiguedad REAL NOT NULL,
-                                        cantidad_pisos_edificio REAL NOT NULL,
-                                        piso_unidad REAL NOT NULL,
-                                        tipo_inmueble TEXT NOT NULL,
-                                        orientacion TEXT NOT NULL,
-                                        titulo TEXT NOT NULL,
-                                        ubicacion TEXT NOT NULL,
-                                        link TEXT NOT NULL,
-                                        geo_ref_name TEXT NOT NULL,
-                                        PRIMARY KEY (Latitude, Longitude)
-                                    ); """
+    sql = ''' INSERT INTO logs(geo_ref_name, Date,link,exception_print, solved_status)
+              VALUES(?,?,?,?,?) 
+              '''
+    cur = conn.cursor()
+    cur.execute(sql, (geo_ref_name, Date,link,exception_print, solved_status))
+    conn.commit()
 
-    sql_create_price_history_table = """ CREATE TABLE IF NOT EXISTS price_history (
-                                        PriceID INTEGER PRIMARY KEY AUTOINCREMENT,
-                                        Latitude REAL NOT NULL,
-                                        Longitude REAL NOT NULL,
-                                        Price REAL NOT NULL,
-                                        Price_UF REAL NOT NULL,
-                                        Date TEXT NOT NULL,
-                                        tipo_operacion TEXT NOT NULL,
-                                        FOREIGN KEY (Latitude, Longitude) REFERENCES properties (Latitude, Longitude)
-                                    );"""
 
-    # Create a database connection
-    conn = create_db_connection(database)
+def create_conect_db(name):
+    """ create the db (if doesn't exist) and return the connection"""
 
-    # Create tables
-    if conn is not None:
+    conn = create_db_connection(name)
+
+    if check_db_exists:
+
+        sql_create_properties_table = """ CREATE TABLE IF NOT EXISTS properties (
+                                            Latitude REAL NOT NULL,
+                                            Longitude REAL NOT NULL,
+                                            dias_desde_publicacion REAL NOT NULL,
+                                            n_dormitorios REAL ,
+                                            n_banos REAL ,
+                                            superficie_total REAL ,
+                                            superficie_util REAL ,
+                                            estacionamientos REAL ,
+                                            bodegas REAL ,
+                                            antiguedad REAL ,
+                                            cantidad_pisos_edificio REAL ,
+                                            piso_unidad REAL ,
+                                            tipo_inmueble TEXT ,
+                                            orientacion TEXT ,
+                                            titulo TEXT ,
+                                            ubicacion TEXT ,
+                                            link TEXT NOT NULL,
+                                            geo_ref_name TEXT NOT NULL,
+                                            listed BOOLEAN NOT NULL,
+                                            PRIMARY KEY (Latitude, Longitude)
+                                        ); """
+
+        sql_create_price_history_table = """ CREATE TABLE IF NOT EXISTS price_history (
+                                            PriceID INTEGER PRIMARY KEY AUTOINCREMENT,
+                                            Latitude REAL NOT NULL,
+                                            Longitude REAL NOT NULL,
+                                            Price REAL NOT NULL,
+                                            Price_UF REAL NOT NULL,
+                                            Date TEXT NOT NULL,
+                                            tipo_operacion TEXT NOT NULL,
+                                            FOREIGN KEY (Latitude, Longitude) REFERENCES properties (Latitude, Longitude)
+                                        );"""
+
+        sql_create_logs_table = """ CREATE TABLE IF NOT EXISTS logs (
+                                            LogID INTEGER PRIMARY KEY AUTOINCREMENT,
+                                            geo_ref_name TEXT NOT NULL,
+                                            Date TEXT NOT NULL,
+                                            link TEXT NOT NULL,
+                                            exception_print TEXT NOT NULL,
+                                            solved_status BOOLEAN NOT NULL
+                                            );"""
+
         create_table(conn, sql_create_properties_table)
         create_table(conn, sql_create_price_history_table)
-    else:
-        print("Error! Cannot create the database connection.")
+        create_table(conn, sql_create_logs_table)
 
-if __name__ == '__main__':
+    return conn
 
-    # main()
+def check_db_exists(db_filename):
+    """ check if db file already exist"""
+    current_dir = os.path.dirname(os.path.abspath(__file__))
+    db_path = os.path.join(current_dir, db_filename)
+    return os.path.isfile(db_path)
 
-    # inserting values
-    database = "real_estate_data.db"
-    conn = create_db_connection(database)
-    insert_price_history(conn, 50, -50, 999, datetime.now())
 
-    pass
 
-# TODO:
-#    1. INSERTAR PROPIEDADES DE CADA REAL STATE
-#     2. RECUPERAR EL JOINED CON EL UKLTIMO PRECIO DE CADA PROPIEDAD
-#     3. UPDATEAR PROPIEDADES
-#     4. GET JOINED TABLE WITH
-#  5. AGREGAR TABLA
-#%%

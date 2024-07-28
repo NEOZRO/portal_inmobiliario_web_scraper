@@ -16,8 +16,8 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
 
-from logs import  log_msg
-from database import create_db_connection, create_table, insert_price_history
+from logs import  log_exception_str
+from database import *
 
 class WebScraperPortalInmobiliario:
     """
@@ -78,6 +78,7 @@ class WebScraperPortalInmobiliario:
         self.current_url = None
         self.last_soup_debug=None
 
+        self.database_name  = "real_state.db"
         self.current_time_str = datetime.now().strftime('%H%M_%d_%m_%y')
         self.theme = theme
         self.webdriver_path = '.\chromedriver.exe'
@@ -97,7 +98,15 @@ class WebScraperPortalInmobiliario:
         self.get_uf_today()
         self.init_webdriver()
 
-        # if is already a folder with a poly selection. just download the new data of the location
+        self.conn_db = create_conect_db(self.database_name) # it creates only if it doesn't exist
+
+        self.check_if_existing_property_project()
+
+
+
+    def check_if_existing_property_project(self):
+        """ if is already a folder with a poly selection. SKIP poly selection and just download the new data of the location """
+
         self.json_polygon_path = os.path.join(self.full_path, f'{self.folder_save_name}.json') # NOQA
         if not os.path.exists(self.json_polygon_path):
             self.map_picker()
@@ -109,7 +118,13 @@ class WebScraperPortalInmobiliario:
 
             except Exception as e:
                 self.bar_progress_get_data.set_description("Error, please check log file   ")
-                log_msg(exception=e,path= self.full_path, url=self.current_url)
+                insert_error_log(self.conn_db,
+                                 self.folder_save_name,
+                                 datetime.now(),
+                                 self.current_url,
+                                 log_exception_str(exception=e),
+                                 False)
+
 
     def empty_lists_except_specific(self, keep):
         """ clear all lists in the class to store new data, except the one to keep [polygon coordinates]"""
@@ -452,20 +467,31 @@ class WebScraperPortalInmobiliario:
         """
 
         for url in self.cards_urls:
-            self.bar_progress_get_data.update(1)
-            self.current_url = url
 
-            soup = self.get_correct_soup_from_url(url)
-            self.last_soup_debug = soup
+            try:
+                self.bar_progress_get_data.update(1)
+                self.current_url = url
 
-            self.title.append(soup.find_all("h1","ui-pdp-title")[0].text)
-            self.precios.append(self.get_price_from_soup(soup))
-            self.ubicacion.append([h2 for h2 in soup.find_all('h2') if h2.text == "Ubicación"][0].parent.text.split("Ver información")[0].split("Ubicación")[1])
-            self.dias_desde_publicacion.append(self.get_days_since_published(soup))
-            lat,lon = self.get_latitud_longitud_from_soup(soup)
-            self.latitud.append(lat)
-            self.longitud.append(lon)
-            self.get_data_from_table_in_url()
+                soup = self.get_correct_soup_from_url(url)
+                self.last_soup_debug = soup
+
+                self.title.append(soup.find_all("h1","ui-pdp-title")[0].text)
+                self.precios.append(self.get_price_from_soup(soup))
+                self.ubicacion.append([h2 for h2 in soup.find_all('h2') if h2.text == "Ubicación"][0].parent.text.split("Ver información")[0].split("Ubicación")[1])
+                self.dias_desde_publicacion.append(self.get_days_since_published(soup))
+                lat,lon = self.get_latitud_longitud_from_soup(soup)
+                self.latitud.append(lat)
+                self.longitud.append(lon)
+                self.get_data_from_table_in_url()
+
+            except Exception as e:
+                insert_error_log(self.conn_db,
+                                 self.folder_save_name,
+                                 datetime.now(),
+                                 self.current_url,
+                                 log_exception_str(exception=e),
+                                 False)
+                continue
 
     def get_correct_soup_from_url(self,url):
         """
@@ -507,6 +533,38 @@ class WebScraperPortalInmobiliario:
             "link": self.cards_urls}
 
         self.df_results = pd.DataFrame(dict_df)
+    def compile_results_df_to_db(self):
+        """ adds the results from df to the database"""
+
+        for i,row in self.df_results.iterrows():
+            insert_or_update_property(self.conn_db,(row.latitud,
+                                            row.longitud,
+                                            row.dias_desde_publicacion,
+                                            row.n_dormitorios,
+                                            row.n_banos,
+                                            row.superficie_total,
+                                            row.superficie_util,
+                                            row.estacionamientos,
+                                            row.bodegas,
+                                            row.antiguedad,
+                                            row.cantidad_pisos_edificio,
+                                            row.piso_unidad,
+                                            row.tipo_inmueble,
+                                            row.orientacion,
+                                            row.titulo,
+                                            row.ubicacion,
+                                            row.link,
+                                            self.folder_save_name,
+                                            True))
+            insert_price_history(self.conn_db,
+                                 row.latitud,
+                                 row.longitud,
+                                 row.precio,
+                                 row.precio_UF,
+                                 self.tipo_operacion,
+                                 datetime.now())
+
+
 
     def save_results(self, filename):
         """ save data into a excel file, saved in the same folder of this script"""
@@ -573,18 +631,25 @@ class WebScraperPortalInmobiliario:
             # ARRIENDO
             self.tipo_operacion = "arriendo"
             self.extract_urls_from_main_page_geo()
+            sleep(10)
             WebScraperPortalInmobiliario.update_info_progress_tqdm_bar(self.bar_progress_get_data,
                                                                        new_len=len(self.cards_urls),
                                                                        new_text='Arriendo: Obtaining data...')
             self.get_data_from_urls()
+            sleep(10)
+
             self.compile_results_df()
-            self.save_results(filename=f"results_invesment_{self.tipo_operacion}_{self.type}_{self.current_time_str}.xlsx")
+
+            delist_all_properties(self.conn_db) # all properties become delisted , unless they are still posted online
+            self.compile_results_df_to_db()
 
             # VENTA
             self.tipo_operacion = "venta"
             self.empty_lists_except_specific("picked_pts_features")
 
             self.extract_urls_from_main_page_geo()
+            sleep(10)
+
             WebScraperPortalInmobiliario.update_info_progress_tqdm_bar(self.bar_progress_get_data,
                                                                        new_len=len(self.cards_urls),
                                                                        new_text='Venta: Obtaining data...')
@@ -592,8 +657,9 @@ class WebScraperPortalInmobiliario:
 
             self.close_webdriver()
             self.compile_results_df()
-            self.save_results(filename=f"results_invesment_{self.tipo_operacion}_{self.type}_{self.current_time_str}.xlsx")
+            self.compile_results_df_to_db()
 
+            self.conn_db.close()
         else:
 
             self.bar_progress_get_data.set_description("Error")
@@ -612,7 +678,6 @@ class WebScraperPortalInmobiliario:
 
         except Exception as e:
             self.bar_progress_get_data.set_description("Error, please check log file   ")
-            log_msg(exception=e,path= self.full_path, url=self.current_url)
 
     @staticmethod
     def update_info_progress_tqdm_bar(bar, new_len, new_text):
