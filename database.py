@@ -36,14 +36,15 @@ def insert_or_update_property(conn, property):
                                       cantidad_pisos_edificio, 
                                       piso_unidad, 
                                       tipo_inmueble, 
-                                      orientacion, 
+                                      orientacion,
+                                      gastos_comunes, 
                                       titulo, 
                                       ubicacion, 
                                       link, 
                                       geo_ref_name, 
                                       listed)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-              ON CONFLICT (Latitude, Longitude) DO UPDATE SET
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ON CONFLICT (Latitude, Longitude, titulo) DO UPDATE SET
                   dias_desde_publicacion = EXCLUDED.dias_desde_publicacion,
                   link = EXCLUDED.link,
                   listed = EXCLUDED.listed
@@ -53,23 +54,15 @@ def insert_or_update_property(conn, property):
     cur.execute(sql, property)
     conn.commit()
 
-def insert_price_history(conn, latitude, longitude, price,Price_UF,tipo_operacion, date):
+def insert_price_history(conn, latitude, longitude, titulo, price,Price_UF,tipo_operacion, date):
     """Inserts price history data into the database"""
-    sql = ''' INSERT INTO price_history(Latitude, Longitude, Price, Price_UF,tipo_operacion, Date)
-              VALUES(?,?,?,?,?,?) 
+    sql = ''' INSERT INTO price_history(Latitude, Longitude, titulo, Price, Price_UF,tipo_operacion, Date)
+              VALUES(?,?,?,?,?,?,?) 
               '''
     cur = conn.cursor()
-    cur.execute(sql, (latitude, longitude, price, Price_UF,tipo_operacion, date))
+    cur.execute(sql, (latitude, longitude, titulo, price, Price_UF,tipo_operacion, date))
     conn.commit()
 
-def get_price_history(conn, latitude, longitude):
-    """Fetches price history data from the database"""
-    sql = "SELECT * FROM price_history WHERE Latitude=? AND Longitude=?"
-    cur = conn.cursor()
-    cur.execute(sql, (latitude, longitude))
-    rows = cur.fetchall()
-    for row in rows:
-        print(row)
 
 def get_joined_data_as_dataframe(conn,threshold_date):
     """
@@ -79,10 +72,9 @@ def get_joined_data_as_dataframe(conn,threshold_date):
     join_query = f"""
     SELECT properties.*, price_history.Price, price_history.Price_UF, price_history.tipo_operacion, price_history.Date
     FROM properties
-    JOIN price_history ON properties.Latitude = price_history.Latitude AND properties.Longitude = price_history.Longitude
+    JOIN price_history ON properties.Latitude = price_history.Latitude AND properties.Longitude = price_history.Longitude AND properties.titulo = price_history.titulo
     WHERE price_history.Date > '{threshold_date}'
     """
-
 
     try:
         # Use pandas to read the query result directly into a DataFrame
@@ -139,23 +131,25 @@ def create_conect_db(name):
                                             piso_unidad REAL ,
                                             tipo_inmueble TEXT ,
                                             orientacion TEXT ,
-                                            titulo TEXT ,
+                                            gastos_comunes REAL,
+                                            titulo TEXT NOT NULL,
                                             ubicacion TEXT ,
                                             link TEXT NOT NULL,
                                             geo_ref_name TEXT NOT NULL,
                                             listed BOOLEAN NOT NULL,
-                                            PRIMARY KEY (Latitude, Longitude)
+                                            PRIMARY KEY (Latitude, Longitude, titulo)
                                         ); """
 
         sql_create_price_history_table = """ CREATE TABLE IF NOT EXISTS price_history (
                                             PriceID INTEGER PRIMARY KEY AUTOINCREMENT,
                                             Latitude REAL NOT NULL,
                                             Longitude REAL NOT NULL,
+                                            titulo TEXT NOT NULL,
                                             Price REAL NOT NULL,
                                             Price_UF REAL NOT NULL,
                                             Date TEXT NOT NULL,
                                             tipo_operacion TEXT NOT NULL,
-                                            FOREIGN KEY (Latitude, Longitude) REFERENCES properties (Latitude, Longitude)
+                                            FOREIGN KEY (Latitude, Longitude, titulo) REFERENCES properties (Latitude, Longitude, titulo)
                                         );"""
 
         sql_create_logs_table = """ CREATE TABLE IF NOT EXISTS logs (

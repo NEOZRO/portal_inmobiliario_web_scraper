@@ -1,23 +1,29 @@
 from bs4 import BeautifulSoup
 import requests
 from tqdm.auto import tqdm
-from time import sleep
+from time import sleep, time
 import numpy as np
 import pandas as pd
 from datetime import datetime
-from ipyleaflet import Map, DrawControl, TileLayer,GeoJSON
+from ipyleaflet import Map, DrawControl, TileLayer, GeoJSON
 import re
 from IPython.display import display
 import os
 import json
+import random
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
+from selenium.common.exceptions import TimeoutException
 
-from logs import  log_exception_str
+from fake_useragent import UserAgent
+from free_proxies import FreeProxy
+
+from logs import log_exception_str
 from database import *
+
 
 class WebScraperPortalInmobiliario:
     """
@@ -33,7 +39,8 @@ class WebScraperPortalInmobiliario:
     :return: df_results, xlsx file (optional)
 
     """
-    def __init__(self,tipo_operacion,tipo_inmueble, theme="default",folder_save_name:str=None):
+
+    def __init__(self, tipo_operacion, tipo_inmueble, theme="default", folder_save_name: str = None, debug=False):
 
         self.wea = []
         self.longitud = []
@@ -62,10 +69,11 @@ class WebScraperPortalInmobiliario:
         self.cards_containers = []
         self.cards_urls = []
 
+        self.total_dict_properties = None
         self.main_soup = None
         self.uf = None
-        self.region=None
-        self.n_pages=None
+        self.region = None
+        self.n_pages = None
         self.main_interactive_map = None
         self.geo_url_main = None
         self.total_number_of_properties = None
@@ -76,18 +84,22 @@ class WebScraperPortalInmobiliario:
         self.df_inversion_arriendo = None
         self.full_path = None
         self.current_url = None
-        self.last_soup_debug=None
+        self.last_soup_debug = None
 
-        self.database_name  = "real_state.db"
+        self.database_name = "real_state.db"
         self.current_time_str = datetime.now().strftime('%H%M_%d_%m_%y')
         self.theme = theme
         self.webdriver_path = '.\chromedriver.exe'
-        self.sleep_time = 2 # lower sleep times between requests may produce temporal bans
 
-        self.center_map_coordinates = (-33.4489, -70.6693) # Stgo,Chile
+        self.ip_blocked_status_index = 0
+        # self.proxy_list = FreeProxy().get_proxy_list()
+
+        self.sleep_time = 4  # lower sleep times between requests may produce temporal bans
+
+        self.center_map_coordinates = (-33.4489, -70.6693)  # Stgo,Chile
 
         self.tipo_operacion = tipo_operacion
-        self.type=tipo_inmueble
+        self.type = tipo_inmueble
 
         if not isinstance(folder_save_name, str):
             raise ValueError("folder_save_name must be a string")
@@ -96,24 +108,24 @@ class WebScraperPortalInmobiliario:
         self.create_results_folder()
 
         self.get_uf_today()
-        self.init_webdriver()
+        self.init_webdriver(get_images=True)
+        self.total_number_request = 0
 
-        self.conn_db = create_conect_db(self.database_name) # it creates only if it doesn't exist
-
-        self.check_if_existing_property_project()
-
-
+        if not debug:
+            self.conn_db = create_conect_db(self.database_name)  # it creates only if it doesn't exist
+            self.check_if_existing_property_project()
 
     def check_if_existing_property_project(self):
         """ if is already a folder with a poly selection. SKIP poly selection and just download the new data of the location """
 
-        self.json_polygon_path = os.path.join(self.full_path, f'{self.folder_save_name}.json') # NOQA
+        self.json_polygon_path = os.path.join(self.full_path, f'{self.folder_save_name}.json')  # NOQA
         if not os.path.exists(self.json_polygon_path):
             self.map_picker()
         else:
             try:
                 self.load_json_polygon_selection()
-                self.bar_progress_get_data = tqdm(total=100, desc=f"UPDATING data for location found in {self.folder_save_name}")
+                self.bar_progress_get_data = tqdm(total=100,
+                                                  desc=f"UPDATING data for location found in {self.folder_save_name}")
                 self.execute_main_process()
 
             except Exception as e:
@@ -125,13 +137,11 @@ class WebScraperPortalInmobiliario:
                                  log_exception_str(exception=e),
                                  False)
 
-
     def empty_lists_except_specific(self, keep):
         """ clear all lists in the class to store new data, except the one to keep [polygon coordinates]"""
         for attr in self.__dict__:
             if isinstance(getattr(self, attr), list) and attr != keep:
                 setattr(self, attr, [])
-
 
     def get_uf_today(self):
         """
@@ -150,25 +160,49 @@ class WebScraperPortalInmobiliario:
             decimals = int(div.get_text().split(",")[1])
 
             value = integer + decimals / 100
-            self.uf =  value
+            self.uf = value
 
-    def init_webdriver(self):
+    def init_webdriver(self, get_images=False):
         """ initialize chrome webdriver"""
+        # TODO: MEJORAR EN CASO DE PONER DINERO
+        # PARA MEJORAR SE REQUERIRAN HEADER DINAMICOS JUNTO A PROXIES VARIABLES, SERVICIOS COMO ZEROROWS OFRECEN AMBAS FUNCIONALIDADES
+
+        ua = UserAgent()
         chrome_options = Options()
+
         chrome_options.add_argument("--headless")  # Ensure GUI is off
+        chrome_options.add_argument("--incognito")
+
+        chrome_options.add_argument(f'user-agent={ua.random}')  # random user agent
+
+        # proxy
+        # if self.ip_blocked_status_index < 0:  # TODO SI TIENE EL IGUAL UTILIZARA LA IP NUESTRA EN PRIMERA INSTANCIA
+        #     # self.proxy_list = FreeProxy().get_proxy_list()
+        #     # proxy = random.choice(self.proxy_list)
+        #     proxy = "103.35.109.205:58080"
+        #     chrome_options.add_argument(f"--proxy-server={proxy}")
+
+        # skip images (it affects some part of the whole process)
+        if not get_images:
+            chrome_options.add_argument('--blink-settings=imagesEnabled=false')  # command to avoid images
+
         service = Service(executable_path=self.webdriver_path)
         self.driver = webdriver.Chrome(options=chrome_options, service=service)
+        # self.driver.set_page_load_timeout(10)
 
     def webdriver_request(self, url, wait=0):
         """  request using chrome webdriver"""
+
+        self.total_number_request += 1
         self.driver.get(url)
 
-        if wait >0:
-            sleep(wait) # WAIT UNTIL PAGE LOAD
+        if wait > 0:
+            sleep(wait)  # WAIT UNTIL PAGE LOAD
 
         soup = BeautifulSoup(self.driver.page_source, 'html.parser')
 
         return soup
+
     def webdriver_refresh(self, wait=0):
         """ refresh webdriver page"""
         sleep(wait)
@@ -179,18 +213,23 @@ class WebScraperPortalInmobiliario:
     def close_webdriver(self):
         """ close webdriver session"""
         self.driver.quit()
+        self.total_number_request = 0
 
     def extract_urls_from_main_page_basic(self):
         """
         Extracts single data of houses from all cards in main pages
         :return: list with single house url
         """
-        for i in range(1,self.n_pages*50,50):
+        for i in range(1, self.n_pages * 50, 50):
             if self.tipo_operacion == 'arriendo':
-                main_url = 'https://www.portalinmobiliario.com/'+self.tipo_operacion.lower().replace(" ","-")+'/'+self.type+'/'+self.region+'/_Desde_'+ str(i)
+                main_url = 'https://www.portalinmobiliario.com/' + self.tipo_operacion.lower().replace(" ",
+                                                                                                       "-") + '/' + self.type + '/' + self.region + '/_Desde_' + str(
+                    i)
             elif self.tipo_operacion == 'venta':
                 # solo interesan propiedades usadas
-                main_url = 'https://www.portalinmobiliario.com/'+self.tipo_operacion.lower().replace(" ","-")+'/'+self.type+'/propiedades-usadas/'+self.region+'/_Desde_'+ str(i)
+                main_url = 'https://www.portalinmobiliario.com/' + self.tipo_operacion.lower().replace(" ",
+                                                                                                       "-") + '/' + self.type + '/propiedades-usadas/' + self.region + '/_Desde_' + str(
+                    i)
             else:
                 raise ValueError('tipo de operacion no valido')
 
@@ -200,7 +239,7 @@ class WebScraperPortalInmobiliario:
         self.get_urls_from_containers()
         self.get_data_from_containers()
 
-    def get_total_number_of_properties_in_location(self,min_lat,max_lat,min_lon,max_lon):
+    def get_total_number_of_properties_in_location(self, min_lat, max_lat, min_lon, max_lon):
         """
         get total number of properties in location
         :param lat-log: latitude and longitud of the location/area
@@ -209,12 +248,11 @@ class WebScraperPortalInmobiliario:
         self.geo_url_main = f"https://www.portalinmobiliario.com/{self.tipo_operacion}/{self.type}/_DisplayType_M_item*location_lat:{min_lat}*{max_lat},lon:{min_lon}*{max_lon}"
 
         soup = self.webdriver_request(self.geo_url_main)
-        find_header_text = soup.find_all('div',{'class':'ui-search-map-list ui-search-map-list__header'})
+        find_header_text = soup.find_all('div', {'class': 'ui-search-map-list ui-search-map-list__header'})
         if len(find_header_text) == 0:
             return 0
         else:
-            return int(find_header_text[0].get_text().split("inmueble")[0].split(" ")[-2].replace(".",""))
-
+            return int(find_header_text[0].get_text().split("inmueble")[0].split(" ")[-2].replace(".", ""))
 
     def extract_urls_from_main_page_geo(self):
         """
@@ -222,74 +260,75 @@ class WebScraperPortalInmobiliario:
         :return: list with single house url
         """
         polygon_coordinates = np.asarray(self.picked_pts_features[0]["geometry"]["coordinates"][0])
-        max_lon = np.max(polygon_coordinates[:,0])
-        min_lon = np.min(polygon_coordinates[:,0])
-        max_lat = np.max(polygon_coordinates[:,1])
-        min_lat = np.min(polygon_coordinates[:,1])
+        max_lon = np.max(polygon_coordinates[:, 0])
+        min_lon = np.min(polygon_coordinates[:, 0])
+        max_lat = np.max(polygon_coordinates[:, 1])
+        min_lat = np.min(polygon_coordinates[:, 1])
 
-        self.total_number_of_properties = self.get_total_number_of_properties_in_location(min_lat,max_lat,min_lon,max_lon)
+        self.total_number_of_properties = self.get_total_number_of_properties_in_location(min_lat, max_lat, min_lon,
+                                                                                          max_lon)
 
         # in case no properties found. Exit
         if self.total_number_of_properties == 0:
             return
 
-        n_main_pages = int(np.ceil(self.total_number_of_properties/50))
+        n_main_pages = int(np.ceil(self.total_number_of_properties / 50))
 
-        for i in range(1,n_main_pages+1):
-
-            url_extra_string = "_Desde_"+str(int(np.floor((i-1)/2) * 100+ 1)) if i>=3 else ""
+        for i in range(1, n_main_pages + 1):
+            url_extra_string = "_Desde_" + str(int(np.floor((i - 1) / 2) * 100 + 1)) if i >= 3 else ""
             geo_url = f"https://www.portalinmobiliario.com/{self.tipo_operacion}/{self.type}/{url_extra_string}_DisplayType_M_item*location_lat:{min_lat}*{max_lat},lon:{min_lon}*{max_lon}#{i}"
 
             self.current_url = geo_url
-            self.main_soup = self.webdriver_request(geo_url, wait=4) # pair n_page takes time to update links
+            self.main_soup = self.webdriver_request(geo_url, wait=4)  # pair n_page takes time to update links
             self.last_soup_debug = self.main_soup
             self.get_layout_cards_containers(mode="geo")
 
         self.get_urls_from_containers(mode="geo")
 
-
     def get_layout_cards_containers(self, mode="basic"):
         """
         get all cards containers inside main page of search
         """
-        if mode=="basic":
-            self.cards_containers.extend(self.main_soup.find_all('li',{'class':'ui-search-layout__item'}))
-        elif mode=="geo":
-            self.cards_containers.extend(self.main_soup.find_all('div',{'class':'ui-search-map-list ui-search-map-list__item'}))
+        if mode == "basic":
+            self.cards_containers.extend(self.main_soup.find_all('li', {'class': 'ui-search-layout__item'}))
+        elif mode == "geo":
+            self.cards_containers.extend(
+                self.main_soup.find_all('div', {'class': 'ui-search-map-list ui-search-map-list__item'}))
 
     def get_urls_from_containers(self, mode="basic"):
         """
         get all cards urls from each containers/cards list
         """
-        if mode=="basic":
+        if mode == "basic":
             for container in self.cards_containers:
-                self.cards_urls.append(container.find('a',class_='ui-search-result__image ui-search-link')['href'])
-        elif mode=="geo":
+                self.cards_urls.append(container.find('a', class_='ui-search-result__image ui-search-link')['href'])
+        elif mode == "geo":
             for container in self.cards_containers:
-                self.cards_urls.append(container.find('a',class_='ui-search-result__main-image-link ui-search-link')['href'])
+                self.cards_urls.append(
+                    container.find('a', class_='ui-search-result__main-image-link ui-search-link')['href'])
 
     def get_data_from_containers(self):
         """
         get all data avaliable inside each containers/cards list
         """
         for i, container in enumerate(self.cards_containers):
-            list_attributes = container.find_all('li',{'class':'ui-search-card-attributes__attribute'})
+            list_attributes = container.find_all('li', {'class': 'ui-search-card-attributes__attribute'})
             found_attributes = [text.split(" ")[-1] for text in [atrib.text for atrib in list_attributes]]
 
             index_offset = 0
             # check if the atributes exists
-            if 'dormitorios' in found_attributes or  'dormitorio' in found_attributes:
+            if 'dormitorios' in found_attributes or 'dormitorio' in found_attributes:
                 self.n_dormitorios.append(int(list_attributes[0].text.split(" ")[0].replace('.', '')))
             else:
-                index_offset-=1
+                index_offset -= 1
                 self.n_dormitorios.append(np.NAN)
-            if 'baños' in found_attributes or  'baño' in found_attributes:
-                self.n_banos.append(int(list_attributes[1+index_offset].text.split(" ")[0].replace('.', '')))
+            if 'baños' in found_attributes or 'baño' in found_attributes:
+                self.n_banos.append(int(list_attributes[1 + index_offset].text.split(" ")[0].replace('.', '')))
             else:
-                index_offset-=1
+                index_offset -= 1
                 self.n_banos.append(np.NAN)
             if "útiles" in found_attributes:
-                self.metraje_util.append(int(list_attributes[2+index_offset].text.split(" ")[0].replace('.', '')))
+                self.metraje_util.append(int(list_attributes[2 + index_offset].text.split(" ")[0].replace('.', '')))
             else:
                 self.metraje_util.append(np.NAN)
 
@@ -299,36 +338,36 @@ class WebScraperPortalInmobiliario:
         """
         for i, container in enumerate(self.cards_containers):
 
-            current_atribute = container.find_all('div',{'class':'ui-search-result__content'})[0]
-            found_attributes = current_atribute.find_all('div',{'class':'ui-search-result__content-attributes'})[0].get_text().replace(u'\xa0', u' ').split(" ")
+            current_atribute = container.find_all('div', {'class': 'ui-search-result__content'})[0]
+            found_attributes = current_atribute.find_all('div', {'class': 'ui-search-result__content-attributes'})[
+                0].get_text().replace(u'\xa0', u' ').split(" ")
 
-            if 'dormitorios' in found_attributes or  'dormitorio' in found_attributes:
-                self.n_dormitorios.append(int(found_attributes[-2].replace(".","")))
+            if 'dormitorios' in found_attributes or 'dormitorio' in found_attributes:
+                self.n_dormitorios.append(int(found_attributes[-2].replace(".", "")))
             else:
                 self.n_dormitorios.append(np.NAN)
 
             if "útiles" in found_attributes:
-                self.metraje_util.append(int(found_attributes[0].replace(".","")))
+                self.metraje_util.append(int(found_attributes[0].replace(".", "")))
             else:
                 self.metraje_util.append(np.NAN)
 
             self.n_banos.append(np.NAN)
 
-
-    def get_price_from_soup(self,soup):
+    def get_price_from_soup(self, soup):
         """
         get price from soup/url of a specific real state property page
         """
 
-        price_symbol = soup.find_all("span","andes-money-amount__currency-symbol")[0].text
+        price_symbol = soup.find_all("span", "andes-money-amount__currency-symbol")[0].text
         if price_symbol == "$":
-            return int(soup.find_all("span","andes-money-amount__fraction")[0].text.replace(".",""))
+            return int(soup.find_all("span", "andes-money-amount__fraction")[0].text.replace(".", ""))
 
         elif price_symbol == "UF":
 
-            integer = int(soup.find_all("span","andes-money-amount__fraction")[0].text.replace('.', ''))
+            integer = int(soup.find_all("span", "andes-money-amount__fraction")[0].text.replace('.', ''))
 
-            decimals_in_price = soup.find_all("span","andes-money-amount__cents")
+            decimals_in_price = soup.find_all("span", "andes-money-amount__cents")
             if decimals_in_price:
                 decimals = int(decimals_in_price[0].text)
             else:
@@ -340,56 +379,30 @@ class WebScraperPortalInmobiliario:
         """
         looks for table inside urls and extract the needed data
         """
-        total_dict_proerties = {'Superficie total': np.nan,
-                                'Superficie útil': np.nan,
-                                'Dormitorios': np.nan,
-                                'Baños': np.nan,
-                                'Bodegas': np.nan,
-                                'Cantidad de pisos': np.nan,
-                                'Tipo de inmueble': np.nan,
-                                'Orientación': np.nan,
-                                'Antigüedad': np.nan,
-                                'Gastos comunes': np.nan,
-                                "Número de piso de la unidad": np.nan,
-                                "Estacionamientos": np.nan
-                                }
 
         tbl = self.driver.find_element(By.XPATH, "//table[@class='andes-table']")
-        table_data  = pd.read_html(tbl.get_attribute('outerHTML'))[0]
+        table_data = pd.read_html(tbl.get_attribute('outerHTML'))[0]
 
         self.wea.append(table_data)
 
         # extracting dinamic table data into dict
-        for i,row in table_data.iterrows():
+        for i, row in table_data.iterrows():
 
             if row.loc[0] == "Tipo de casa" or row.loc[0] == "Tipo de departamento":
-                total_dict_proerties["Tipo de inmueble"] = row.loc[1]
+                self.total_dict_properties["Tipo de inmueble"] = row.loc[1]
 
-            elif row.loc[0] in ["Superficie total","Superficie útil"]:
-                total_dict_proerties[row.loc[0]] = float(row.loc[1].split(" ")[0])
+            elif row.loc[0] in ["Superficie total", "Superficie útil"]:
+                self.total_dict_properties[row.loc[0]] = float(row.loc[1].split(" ")[0])
 
-            elif row.loc[0] in ["orientacion"]:
-                total_dict_proerties[row.loc[0]] = str(row.loc[1])
+            elif row.loc[0] in ["Orientación"]:
+                self.total_dict_properties[row.loc[0]] = str(row.loc[1])
 
-            elif row.loc[0] in ["Dormitorios","Baños","Estacionamientos","Bodegas","Cantidad de pisos",
-                                "Número de piso de la unidad","Antigüedad","Gastos comunes"]:
-                total_dict_proerties[row.loc[0]] = int(row.loc[1].split(" ")[0].replace(".",""))
+            elif row.loc[0] in ["Dormitorios", "Baños", "Estacionamientos", "Bodegas", "Cantidad de pisos",
+                                "Número de piso de la unidad", "Antigüedad", "Gastos comunes"]:
+                self.total_dict_properties[row.loc[0]] = int(row.loc[1].split(" ")[0].replace(".", ""))
 
-        # saving into the global list to later form the dataframe
-        self.superficie_total.append(total_dict_proerties["Superficie total"])
-        self.superficie_util.append(total_dict_proerties["Superficie útil"])
-        self.n_dormitorios.append(total_dict_proerties["Dormitorios"])
-        self.n_banos.append(total_dict_proerties["Baños"])
-        self.estacionamientos.append(total_dict_proerties["Estacionamientos"])
-        self.bodegas.append(total_dict_proerties["Bodegas"])
-        self.cantidad_pisos.append(total_dict_proerties["Cantidad de pisos"])
-        self.piso_unidad.append(total_dict_proerties["Número de piso de la unidad"])
-        self.tipo_inmueble.append(total_dict_proerties["Tipo de inmueble"])
-        self.orientacion.append(total_dict_proerties["Orientación"])
-        self.antiguedad.append(total_dict_proerties["Antigüedad"])
-        self.GC.append(total_dict_proerties["Gastos comunes"])
 
-    def get_days_since_published(self,soup):
+    def get_days_since_published(self, soup):
         """
         get the days since the publcation started
         :param soup: right soup with all the data
@@ -401,58 +414,46 @@ class WebScraperPortalInmobiliario:
         publicado_hoy = soup.find_all(string="Publicado hoy")
         publicado_this_week = soup.find_all(string="Publicado esta semana")
 
-        list_grabbers_publications_days = ["ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-header__bottom-subtitle",
-                                           "ui-pdp-background-color--WHITE ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-header__bottom-subtitle",
-                                           "ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-seller-validated__title"]
+        list_grabbers_publications_days = [
+            "ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-header__bottom-subtitle",
+            "ui-pdp-background-color--WHITE ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-header__bottom-subtitle",
+            "ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-seller-validated__title"]
         index_grabber = 0
         if publicado_hoy:
-            period="dia"
-            quantity=1
+            period = "dia"
+            quantity = 1
         elif publicado_this_week:
-            period="dia"
-            quantity=7
+            period = "dia"
+            quantity = 7
         else:
             # get the line with the days since publication, it has multiles formats
             while True:
-                days_publication_line = soup.find_all("p",list_grabbers_publications_days[index_grabber])
+                days_publication_line = soup.find_all("p", list_grabbers_publications_days[index_grabber])
 
                 if days_publication_line or index_grabber > len(list_grabbers_publications_days):
-                    period =days_publication_line[0].text.split(" ")[3]
-                    quantity=int(days_publication_line[0].text.split(" ")[2])
+                    period = days_publication_line[0].text.split(" ")[3]
+                    quantity = int(days_publication_line[0].text.split(" ")[2])
                     break
                 else:
-                    index_grabber+=1
+                    index_grabber += 1
 
-    # # normal page
-    #     try:
-    #         print("NORMAL_PAGE")
-    #         period = soup.find_all("p","ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-header__bottom-subtitle")[0].text.split(" ")[3]
-    #         quantity = int(soup.find_all("p","ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-header__bottom-subtitle")[0].text.split(" ")[2])
-    #
-    #     # page of verified publishers
-    #     except:
-    #         print("verified publishers")
-    #         period =soup.find_all("p","ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-seller-validated__title")[0].text.split(" ")[3]
-    #         print(period)
-    #         quantity=int(soup.find_all("p","ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-seller-validated__title")[0].text.split(" ")[2])
-    #         print(quantity)
-
-        if period=="meses" or period=="mes":
+        if period == "meses" or period == "mes":
             multiplier = 30
 
-        elif period=="años" or period=="año":
+        elif period == "años" or period == "año":
             multiplier = 365
 
         final_days = multiplier * quantity
 
         return final_days
 
-    def get_latitud_longitud_from_soup(self,soup):
+    def get_latitud_longitud_from_soup(self, soup):
         """
         get latitude and longitude from soup
         :return: latitude and longitude, list
         """
-        url_text_w_coordenates = soup.find_all('div', {"id":"ui-vip-location__map"})[0].find('img').get('srcset').split("=")[5]
+        url_text_w_coordenates = \
+        soup.find_all('div', {"id": "ui-vip-location__map"})[0].find('img').get('srcset').split("=")[5]
 
         latitud = url_text_w_coordenates.split("%")[0]
         pattern_longitud = r"%2C(.*?)&"  # Pattern to match text between '%2C' and '&'
@@ -465,24 +466,76 @@ class WebScraperPortalInmobiliario:
         iterate over all the urls found in the location for each house/real state
         Saves the data into lists to later make a dataframe
         """
+        self.close_webdriver()
+        self.init_webdriver(get_images=False)
 
         for url in self.cards_urls:
+
+            latitud = np.NAN
+            longitud = np.NAN
+            price_value = np.NAN
+            n_days_since_published = np.NAN
+            title = np.NAN
+            ubicacion_string = np.NAN
+            self.total_dict_properties = {'Superficie total': np.nan,
+                                         'Superficie útil': np.nan,
+                                         'Dormitorios': np.nan,
+                                         'Baños': np.nan,
+                                         'Bodegas': np.nan,
+                                         'Cantidad de pisos': np.nan,
+                                         'Tipo de inmueble': np.nan,
+                                         'Orientación': np.nan,
+                                         'Antigüedad': np.nan,
+                                         'Gastos comunes': np.nan,
+                                         "Número de piso de la unidad": np.nan,
+                                         "Estacionamientos": np.nan
+                                         }
 
             try:
                 self.bar_progress_get_data.update(1)
                 self.current_url = url
 
+                init_time = time()
                 soup = self.get_correct_soup_from_url(url)
+                self.get_data_from_table_in_url()
+
                 self.last_soup_debug = soup
 
-                self.title.append(soup.find_all("h1","ui-pdp-title")[0].text)
-                self.precios.append(self.get_price_from_soup(soup))
-                self.ubicacion.append([h2 for h2 in soup.find_all('h2') if h2.text == "Ubicación"][0].parent.text.split("Ver información")[0].split("Ubicación")[1])
-                self.dias_desde_publicacion.append(self.get_days_since_published(soup))
-                lat,lon = self.get_latitud_longitud_from_soup(soup)
-                self.latitud.append(lat)
-                self.longitud.append(lon)
-                self.get_data_from_table_in_url()
+                title = soup.find_all("h1", "ui-pdp-title")[0].text
+                price_value = self.get_price_from_soup(soup)
+                ubicacion_string = [h2 for h2 in soup.find_all('h2') if h2.text == "Ubicación"][0].parent.text.split(
+                    "Ver información")[0].split("Ubicación")[1]
+                n_days_since_published = self.get_days_since_published(soup)
+                latitud, longitud = self.get_latitud_longitud_from_soup(soup)
+
+
+                # save in global list
+                self.title.append(title)
+                self.latitud.append(latitud)
+                self.longitud.append(longitud)
+                self.precios.append(price_value)
+                self.dias_desde_publicacion.append(n_days_since_published)
+                self.superficie_total.append(self.total_dict_properties["Superficie total"])
+                self.superficie_util.append(self.total_dict_properties["Superficie útil"])
+                self.n_dormitorios.append(self.total_dict_properties["Dormitorios"])
+                self.n_banos.append(self.total_dict_properties["Baños"])
+                self.estacionamientos.append(self.total_dict_properties["Estacionamientos"])
+                self.bodegas.append(self.total_dict_properties["Bodegas"])
+                self.cantidad_pisos.append(self.total_dict_properties["Cantidad de pisos"])
+                self.piso_unidad.append(self.total_dict_properties["Número de piso de la unidad"])
+                self.tipo_inmueble.append(self.total_dict_properties["Tipo de inmueble"])
+                self.orientacion.append(self.total_dict_properties["Orientación"])
+                self.antiguedad.append(self.total_dict_properties["Antigüedad"])
+                self.GC.append(self.total_dict_properties["Gastos comunes"])
+                self.ubicacion.append(ubicacion_string)
+
+                end_time = time()
+                # si se hacen mas de X request o se demora mas de 20 segundos en obtener  la data... esta siendo blioqueada la IP
+                if self.total_number_request >= 50 or end_time - init_time > 20:
+                    self.ip_blocked_status_index += 1
+                    self.close_webdriver()
+                    sleep(5)
+                    self.init_webdriver(get_images=False)
 
             except Exception as e:
                 insert_error_log(self.conn_db,
@@ -491,80 +544,108 @@ class WebScraperPortalInmobiliario:
                                  self.current_url,
                                  log_exception_str(exception=e),
                                  False)
+
+                # save in global list
+                self.title.append(title)
+                self.latitud.append(latitud)
+                self.longitud.append(longitud)
+                self.precios.append(price_value)
+                self.dias_desde_publicacion.append(n_days_since_published)
+                self.superficie_total.append(self.total_dict_properties["Superficie total"])
+                self.superficie_util.append(self.total_dict_properties["Superficie útil"])
+                self.n_dormitorios.append(self.total_dict_properties["Dormitorios"])
+                self.n_banos.append(self.total_dict_properties["Baños"])
+                self.estacionamientos.append(self.total_dict_properties["Estacionamientos"])
+                self.bodegas.append(self.total_dict_properties["Bodegas"])
+                self.cantidad_pisos.append(self.total_dict_properties["Cantidad de pisos"])
+                self.piso_unidad.append(self.total_dict_properties["Número de piso de la unidad"])
+                self.tipo_inmueble.append(self.total_dict_properties["Tipo de inmueble"])
+                self.orientacion.append(self.total_dict_properties["Orientación"])
+                self.antiguedad.append(self.total_dict_properties["Antigüedad"])
+                self.GC.append(self.total_dict_properties["Gastos comunes"])
+                self.ubicacion.append(ubicacion_string)
+
                 continue
 
-    def get_correct_soup_from_url(self,url):
+    def get_correct_soup_from_url(self, url):
         """
         Portalinmobiliario has 2 diferents pages, that randomly change.
          This function verify if url is correct to extract more data
         :return: return the soup of correct page
         """
         wrong_page = True
-        soup = self.webdriver_request(url, wait=1)
+        soup = self.webdriver_request(url)
+
         while wrong_page:
-            soup = self.webdriver_refresh(wait=self.sleep_time)
+
+            soup = self.webdriver_refresh()
+            sleep(random.uniform(1, 3))
+
             all_h2 = [h2.text for h2 in soup.find_all('h2')]
             # if 'ubication' is in a secondary title (h2). Then its the good page. Continue
-            if "Ubicación" in all_h2:
+            if "Descripción" in all_h2 and "Ubicación" in all_h2:
                 wrong_page = False
 
         return soup
+
     def compile_results_df(self):
         """ generate the final dataframe of results"""
         dict_df = {
-            "latitud":self.latitud,
-            "longitud":self.longitud,
-            "precio":self.precios,
-            "precio_UF" : np.asarray(self.precios)/self.uf,
-            "dias_desde_publicacion":self.dias_desde_publicacion,
-            "n_dormitorios":self.n_dormitorios,
-            "n_banos":self.n_banos,
+            "latitud": self.latitud,
+            "longitud": self.longitud,
+            "precio": self.precios,
+            "precio_UF": np.asarray(self.precios) / self.uf,
+            "dias_desde_publicacion": self.dias_desde_publicacion,
+            "n_dormitorios": self.n_dormitorios,
+            "n_banos": self.n_banos,
             "superficie_total": self.superficie_total,
             "superficie_util": self.superficie_util,
             "estacionamientos": self.estacionamientos,
-            "bodegas":self.bodegas,
-            "antiguedad":self.antiguedad,
-            "cantidad_pisos_edificio":self.cantidad_pisos,
-            "piso_unidad":self.piso_unidad,
-            "tipo_inmueble":self.tipo_inmueble,
-            "orientacion":self.orientacion,
+            "bodegas": self.bodegas,
+            "antiguedad": self.antiguedad,
+            "cantidad_pisos_edificio": self.cantidad_pisos,
+            "piso_unidad": self.piso_unidad,
+            "tipo_inmueble": self.tipo_inmueble,
+            "orientacion": self.orientacion,
+            "gastos_comunes": self.GC,
             "titulo": self.title,
-            "ubicacion":self.ubicacion,
+            "ubicacion": self.ubicacion,
             "link": self.cards_urls}
 
         self.df_results = pd.DataFrame(dict_df)
+
     def compile_results_df_to_db(self):
         """ adds the results from df to the database"""
 
-        for i,row in self.df_results.iterrows():
-            insert_or_update_property(self.conn_db,(row.latitud,
-                                            row.longitud,
-                                            row.dias_desde_publicacion,
-                                            row.n_dormitorios,
-                                            row.n_banos,
-                                            row.superficie_total,
-                                            row.superficie_util,
-                                            row.estacionamientos,
-                                            row.bodegas,
-                                            row.antiguedad,
-                                            row.cantidad_pisos_edificio,
-                                            row.piso_unidad,
-                                            row.tipo_inmueble,
-                                            row.orientacion,
-                                            row.titulo,
-                                            row.ubicacion,
-                                            row.link,
-                                            self.folder_save_name,
-                                            True))
+        for i, row in self.df_results.iterrows():
+            insert_or_update_property(self.conn_db, (row.latitud,
+                                                     row.longitud,
+                                                     row.dias_desde_publicacion,
+                                                     row.n_dormitorios,
+                                                     row.n_banos,
+                                                     row.superficie_total,
+                                                     row.superficie_util,
+                                                     row.estacionamientos,
+                                                     row.bodegas,
+                                                     row.antiguedad,
+                                                     row.cantidad_pisos_edificio,
+                                                     row.piso_unidad,
+                                                     row.tipo_inmueble,
+                                                     row.orientacion,
+                                                     row.gastos_comunes,
+                                                     row.titulo,
+                                                     row.ubicacion,
+                                                     row.link,
+                                                     self.folder_save_name,
+                                                     True))
             insert_price_history(self.conn_db,
                                  row.latitud,
                                  row.longitud,
+                                 row.titulo,
                                  row.precio,
                                  row.precio_UF,
                                  self.tipo_operacion,
                                  datetime.now())
-
-
 
     def save_results(self, filename):
         """ save data into a excel file, saved in the same folder of this script"""
@@ -577,7 +658,7 @@ class WebScraperPortalInmobiliario:
         if not os.path.exists("results"):
             os.makedirs("results")
 
-        self.full_path  = os.path.join("results", self.folder_save_name)
+        self.full_path = os.path.join("results", self.folder_save_name)
         if not os.path.exists(self.full_path):
             os.makedirs(self.full_path)
 
@@ -592,8 +673,8 @@ class WebScraperPortalInmobiliario:
         polygon_coordinates_array = np.asarray(data["geometry"]["coordinates"][0])
 
         map_to_save = self.init_map_ipyflet(theme=self.theme,
-                                            center_map_cordinates=(np.mean(polygon_coordinates_array[:,1]),
-                                                                   np.mean(polygon_coordinates_array[:,0])),
+                                            center_map_cordinates=(np.mean(polygon_coordinates_array[:, 1]),
+                                                                   np.mean(polygon_coordinates_array[:, 0])),
                                             zoom=14)
 
         map_to_save.add(geo_json)
@@ -613,7 +694,7 @@ class WebScraperPortalInmobiliario:
 
     def execute_main_process(self):
         """ main process"""
-        if self.tipo_operacion=="venta" or self.tipo_operacion=="arriendo":
+        if self.tipo_operacion == "venta" or self.tipo_operacion == "arriendo":
 
             self.extract_urls_from_main_page_geo()
 
@@ -626,21 +707,21 @@ class WebScraperPortalInmobiliario:
             self.compile_results_df()
             self.save_results(filename=f"results_{self.tipo_operacion}_{self.type}_{self.current_time_str}.xlsx")
 
-        elif self.tipo_operacion=="inversion":
+        elif self.tipo_operacion == "inversion":
 
             # ARRIENDO
             self.tipo_operacion = "arriendo"
             self.extract_urls_from_main_page_geo()
-            sleep(10)
+
             WebScraperPortalInmobiliario.update_info_progress_tqdm_bar(self.bar_progress_get_data,
                                                                        new_len=len(self.cards_urls),
                                                                        new_text='Arriendo: Obtaining data...')
             self.get_data_from_urls()
-            sleep(10)
+            sleep(3)
 
             self.compile_results_df()
 
-            delist_all_properties(self.conn_db) # all properties become delisted , unless they are still posted online
+            delist_all_properties(self.conn_db)  # all properties become delisted , unless they are still posted online
             self.compile_results_df_to_db()
 
             # VENTA
@@ -648,14 +729,12 @@ class WebScraperPortalInmobiliario:
             self.empty_lists_except_specific("picked_pts_features")
 
             self.extract_urls_from_main_page_geo()
-            sleep(10)
+            sleep(3)
 
             WebScraperPortalInmobiliario.update_info_progress_tqdm_bar(self.bar_progress_get_data,
                                                                        new_len=len(self.cards_urls),
                                                                        new_text='Venta: Obtaining data...')
             self.get_data_from_urls()
-
-            self.close_webdriver()
             self.compile_results_df()
             self.compile_results_df_to_db()
 
@@ -687,13 +766,12 @@ class WebScraperPortalInmobiliario:
         :param new_len: new len
         :param new_text: new text
         """
-        bar.total=new_len
+        bar.total = new_len
         bar.reset(total=new_len)
         bar.set_description(new_text)
         bar.refresh()
 
-
-    def init_map_ipyflet(self,center_map_cordinates, theme="default", zoom=13):
+    def init_map_ipyflet(self, center_map_cordinates, theme="default", zoom=13):
         """ init Map from ipyfleet based con configurations"""
 
         dark_map_layer = TileLayer(
@@ -711,36 +789,36 @@ class WebScraperPortalInmobiliario:
 
         if theme == "dark":
 
-            map = Map(layers=[dark_map_layer,], center=center_map_cordinates, zoom=zoom)
+            map = Map(layers=[dark_map_layer, ], center=center_map_cordinates, zoom=zoom)
 
         elif theme == "default":
 
             map = Map(center=center_map_cordinates, zoom=zoom)
 
         elif theme == "white":
-            map = Map(layers=[white_map_layer,], center=center_map_cordinates, zoom=zoom)
+            map = Map(layers=[white_map_layer, ], center=center_map_cordinates, zoom=zoom)
 
         return map
 
     def map_picker(self):
-            """
+        """
             allows the user to pick from global map a location to search in
             more themes: https://wiki.openstreetmap.org/wiki/Raster_tile_providers
             """
-            self.main_interactive_map = self.init_map_ipyflet(theme=self.theme,
-                                                              center_map_cordinates=self.center_map_coordinates)
+        self.main_interactive_map = self.init_map_ipyflet(theme=self.theme,
+                                                          center_map_cordinates=self.center_map_coordinates)
 
-            draw_control = DrawControl()
+        draw_control = DrawControl()
 
-            draw_control.on_draw(self.handle_draw)
+        draw_control.on_draw(self.handle_draw)
 
-            self.main_interactive_map.add(draw_control)
-            display(self.main_interactive_map) # NOQA
+        self.main_interactive_map.add(draw_control)
+        display(self.main_interactive_map)  # NOQA
 
-            self.bar_progress_get_data = tqdm(total=100, desc="SELECT REGION TO ANALYZE ...")
+        self.bar_progress_get_data = tqdm(total=100, desc="SELECT REGION TO ANALYZE ...")
+
 
 if __name__ == "__main__":
-
     # execute on jupyter only because of the dinamic map
     WebScraperPortalInmobiliario(tipo_operacion="venta",
                                  tipo_inmueble="casa",
