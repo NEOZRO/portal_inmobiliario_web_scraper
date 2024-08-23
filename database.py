@@ -39,11 +39,10 @@ def insert_or_update_property(conn, property):
                                       orientacion,
                                       gastos_comunes, 
                                       titulo, 
-                                      ubicacion, 
                                       link, 
                                       geo_ref_name, 
                                       listed)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
               ON CONFLICT (Latitude, Longitude, titulo) DO UPDATE SET
                   dias_desde_publicacion = EXCLUDED.dias_desde_publicacion,
                   link = EXCLUDED.link,
@@ -133,7 +132,6 @@ def create_conect_db(name):
                                             orientacion TEXT ,
                                             gastos_comunes REAL,
                                             titulo TEXT NOT NULL,
-                                            ubicacion TEXT ,
                                             link TEXT NOT NULL,
                                             geo_ref_name TEXT NOT NULL,
                                             listed BOOLEAN NOT NULL,

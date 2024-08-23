@@ -3,27 +3,23 @@ import requests
 from tqdm.auto import tqdm
 from time import sleep, time
 import numpy as np
-import pandas as pd
-from datetime import datetime
+
 from ipyleaflet import Map, DrawControl, TileLayer, GeoJSON
 import re
 from IPython.display import display
-import os
 import json
 import random
 
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.service import Service
-from selenium.common.exceptions import TimeoutException
 
 from fake_useragent import UserAgent
-from free_proxies import FreeProxy
 
 from logs import log_exception_str
 from database import *
 
+import ast
 
 class WebScraperPortalInmobiliario:
     """
@@ -205,7 +201,6 @@ class WebScraperPortalInmobiliario:
 
     def webdriver_refresh(self, wait=0):
         """ refresh webdriver page"""
-        sleep(wait)
         self.driver.refresh()
         soup = BeautifulSoup(self.driver.page_source, 'html.parser')
         return soup
@@ -247,12 +242,14 @@ class WebScraperPortalInmobiliario:
         """
         self.geo_url_main = f"https://www.portalinmobiliario.com/{self.tipo_operacion}/{self.type}/_DisplayType_M_item*location_lat:{min_lat}*{max_lat},lon:{min_lon}*{max_lon}"
 
-        soup = self.webdriver_request(self.geo_url_main)
-        find_header_text = soup.find_all('div', {'class': 'ui-search-map-list ui-search-map-list__header'})
-        if len(find_header_text) == 0:
-            return 0
+        soup = self.webdriver_request(self.geo_url_main,wait=3)
+        text_number = self.find_next_string(str(soup),'melidata("add", "event_data", {"vertical":"REAL_ESTATE","query":"","limit":100,"offset":0,"total":').split(",")
+
+        if text_number:
+            n_real_state = int(text_number[0])
+            return n_real_state
         else:
-            return int(find_header_text[0].get_text().split("inmueble")[0].split(" ")[-2].replace(".", ""))
+            return 0
 
     def extract_urls_from_main_page_geo(self):
         """
@@ -279,7 +276,7 @@ class WebScraperPortalInmobiliario:
             geo_url = f"https://www.portalinmobiliario.com/{self.tipo_operacion}/{self.type}/{url_extra_string}_DisplayType_M_item*location_lat:{min_lat}*{max_lat},lon:{min_lon}*{max_lon}#{i}"
 
             self.current_url = geo_url
-            self.main_soup = self.webdriver_request(geo_url, wait=4)  # pair n_page takes time to update links
+            self.main_soup = self.webdriver_request(geo_url, wait=5)  # pair n_page takes time to update links
             self.last_soup_debug = self.main_soup
             self.get_layout_cards_containers(mode="geo")
 
@@ -375,31 +372,84 @@ class WebScraperPortalInmobiliario:
 
             return (integer + decimals / 100) * self.uf
 
-    def get_data_from_table_in_url(self):
+    def get_data_real_state_table(self, soup):
+        """
+        retrieve all the data from a table in the page
+        :param soup: soup of the page
+        :return: dict with the information
+        """
+        open_bracket_index = 0
+        main_text = str(soup)
+        search_text = "Características del inmueble" # main identifier of the table
+        index = main_text.find(search_text)
+        next_index = index + len(search_text)
+
+        moving_index = 0
+        while True:
+
+            if main_text[next_index+moving_index] == "[":
+                open_bracket_index = next_index+moving_index+1
+
+            if main_text[next_index+moving_index] == "]":
+                close_bracket_index = next_index+moving_index
+                break
+            moving_index += 1
+
+        data_dict = main_text[open_bracket_index:close_bracket_index]
+        data = ast.literal_eval(data_dict)
+
+        self.wea.append(data)
+
+        final_data=[]
+        for value in data:
+            final_data.append([value["id"] ,
+                               value["text"]])
+
+        return final_data
+
+    def get_data_from_table_in_url(self,soup):
         """
         looks for table inside urls and extract the needed data
         """
 
-        tbl = self.driver.find_element(By.XPATH, "//table[@class='andes-table']")
-        table_data = pd.read_html(tbl.get_attribute('outerHTML'))[0]
-
-        self.wea.append(table_data)
+        table_data = self.get_data_real_state_table(soup)
 
         # extracting dinamic table data into dict
-        for i, row in table_data.iterrows():
+        for attribute, value in table_data:
 
-            if row.loc[0] == "Tipo de casa" or row.loc[0] == "Tipo de departamento":
-                self.total_dict_properties["Tipo de inmueble"] = row.loc[1]
+            if attribute == "Tipo de casa" or attribute == "Tipo de departamento":
+                self.total_dict_properties["Tipo de inmueble"] = value
 
-            elif row.loc[0] in ["Superficie total", "Superficie útil"]:
-                self.total_dict_properties[row.loc[0]] = float(row.loc[1].split(" ")[0])
+            elif attribute in ["Superficie total", "Superficie útil"]:
+                self.total_dict_properties[attribute] = float(value.split(" ")[0])
 
-            elif row.loc[0] in ["Orientación"]:
-                self.total_dict_properties[row.loc[0]] = str(row.loc[1])
+            elif attribute in ["Orientación"]:
+                self.total_dict_properties[attribute] = str(value)
 
-            elif row.loc[0] in ["Dormitorios", "Baños", "Estacionamientos", "Bodegas", "Cantidad de pisos",
+            elif attribute in ["Dormitorios", "Baños", "Estacionamientos", "Bodegas", "Cantidad de pisos",
                                 "Número de piso de la unidad", "Antigüedad", "Gastos comunes"]:
-                self.total_dict_properties[row.loc[0]] = int(row.loc[1].split(" ")[0].replace(".", ""))
+                self.total_dict_properties[attribute] = int(value.split(" ")[0].replace(".", ""))
+
+    @staticmethod
+    def find_next_string(text, search_text):
+        """
+        find next ocurrence/word in a string sequence based on a search word
+        :param text: text in wich to find
+        :param search_text: text that will be searched
+        :return: next word in the sequence
+        """
+
+        index = text.find(search_text)
+
+        if index != -1:
+            next_index = index + len(search_text)
+            if next_index < len(text):
+                next_string = text[next_index:].split()[0]
+                return next_string
+            else:
+                return None
+        else:
+            return None
 
 
     def get_days_since_published(self, soup):
@@ -410,32 +460,44 @@ class WebScraperPortalInmobiliario:
         """
         multiplier = 1
 
-        # verified_publishers = soup.find_all(string="identidad verificada")
-        publicado_hoy = soup.find_all(string="Publicado hoy")
-        publicado_this_week = soup.find_all(string="Publicado esta semana")
 
         list_grabbers_publications_days = [
             "ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-header__bottom-subtitle",
             "ui-pdp-background-color--WHITE ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-header__bottom-subtitle",
-            "ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-seller-validated__title"]
+            "ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-seller-validated__title",
+            "ui-pdp-subtitle ui-pdp-subtitle_rex"]
+        list_types_publications_days = [
+            "p",
+            "p",
+            "p",
+            "span"]
         index_grabber = 0
-        if publicado_hoy:
-            period = "dia"
-            quantity = 1
-        elif publicado_this_week:
-            period = "dia"
-            quantity = 7
-        else:
-            # get the line with the days since publication, it has multiles formats
-            while True:
-                days_publication_line = soup.find_all("p", list_grabbers_publications_days[index_grabber])
 
-                if days_publication_line or index_grabber > len(list_grabbers_publications_days):
-                    period = days_publication_line[0].text.split(" ")[3]
-                    quantity = int(days_publication_line[0].text.split(" ")[2])
+        while True:
+            if index_grabber < len(list_grabbers_publications_days):
+                days_publication_line = soup.find_all(list_types_publications_days[index_grabber],
+                                                      list_grabbers_publications_days[index_grabber])
+
+                if days_publication_line:
+
+                    if  days_publication_line[0].text.find("hoy"):
+                        period = "dia"
+                        quantity = 1
+                    elif days_publication_line[0].text.find("semana"):
+                        period = "dia"
+                        quantity = 7
+
+                    else:
+                        quantity = int(WebScraperPortalInmobiliario.find_next_string(days_publication_line[0].text, "hace"))
+                        period = WebScraperPortalInmobiliario.find_next_string(days_publication_line[0].text, quantity)
+
                     break
                 else:
                     index_grabber += 1
+            else:
+                # could not get days since published
+                return 0
+
 
         if period == "meses" or period == "mes":
             multiplier = 30
@@ -497,14 +559,16 @@ class WebScraperPortalInmobiliario:
 
                 init_time = time()
                 soup = self.get_correct_soup_from_url(url)
-                self.get_data_from_table_in_url()
+                self.get_data_from_table_in_url(soup)
 
                 self.last_soup_debug = soup
 
                 title = soup.find_all("h1", "ui-pdp-title")[0].text
                 price_value = self.get_price_from_soup(soup)
-                ubicacion_string = [h2 for h2 in soup.find_all('h2') if h2.text == "Ubicación"][0].parent.text.split(
-                    "Ver información")[0].split("Ubicación")[1]
+
+                # ubicacion_string = [h2 for h2 in soup.find_all('h2') if h2.text == "Ubicación"][0].parent.text.split(
+                #     "Ver información")[0].split("Ubicación")[1]
+
                 n_days_since_published = self.get_days_since_published(soup)
                 latitud, longitud = self.get_latitud_longitud_from_soup(soup)
 
@@ -527,11 +591,11 @@ class WebScraperPortalInmobiliario:
                 self.orientacion.append(self.total_dict_properties["Orientación"])
                 self.antiguedad.append(self.total_dict_properties["Antigüedad"])
                 self.GC.append(self.total_dict_properties["Gastos comunes"])
-                self.ubicacion.append(ubicacion_string)
+                # self.ubicacion.append(ubicacion_string)
 
                 end_time = time()
                 # si se hacen mas de X request o se demora mas de 20 segundos en obtener  la data... esta siendo blioqueada la IP
-                if self.total_number_request >= 50 or end_time - init_time > 20:
+                if self.total_number_request >= 200 or end_time - init_time > 20:
                     self.ip_blocked_status_index += 1
                     self.close_webdriver()
                     sleep(5)
@@ -578,13 +642,21 @@ class WebScraperPortalInmobiliario:
 
         while wrong_page:
 
-            soup = self.webdriver_refresh()
-            sleep(random.uniform(1, 3))
+            sleep(random.uniform(0, 3))
+
+            # FAKE SCROLLING TO LOAD EVERITHING RIGHT - % of the whole page
+            random_percentage = random.uniform(0, 0.5)
+            scroll_position = self.driver.execute_script(f"return document.body.scrollHeight * {random_percentage};")
+            self.driver.execute_script(f"window.scrollTo(0, {scroll_position});")
 
             all_h2 = [h2.text for h2 in soup.find_all('h2')]
-            # if 'ubication' is in a secondary title (h2). Then its the good page. Continue
-            if "Descripción" in all_h2 and "Ubicación" in all_h2:
+            ubication_in_page = "Ubicación" in all_h2 or "Ubicación e información de la zona" in all_h2
+
+            if "Descripción" in all_h2 and ubication_in_page and "Referencia de precios" in all_h2:
                 wrong_page = False
+
+            else:
+                soup = self.webdriver_refresh()
 
         return soup
 
@@ -609,7 +681,6 @@ class WebScraperPortalInmobiliario:
             "orientacion": self.orientacion,
             "gastos_comunes": self.GC,
             "titulo": self.title,
-            "ubicacion": self.ubicacion,
             "link": self.cards_urls}
 
         self.df_results = pd.DataFrame(dict_df)
@@ -634,7 +705,7 @@ class WebScraperPortalInmobiliario:
                                                      row.orientacion,
                                                      row.gastos_comunes,
                                                      row.titulo,
-                                                     row.ubicacion,
+                                                     # row.ubicacion,
                                                      row.link,
                                                      self.folder_save_name,
                                                      True))
