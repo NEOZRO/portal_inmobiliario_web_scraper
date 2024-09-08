@@ -21,10 +21,36 @@ def create_table(conn, create_table_sql):
     except Exception as e:
         print(e)
 
-def insert_or_update_property(conn, property):
-    """Inserts property data into the database"""
+def get_master_ids(conn,main):
+    """ check if master if already exist in db , if not it creates it """
+    cur = conn.cursor()
+    cur.execute('SELECT ID FROM master_id WHERE latitude=? AND longitude=? AND titulo=?', main)
+    result = cur.fetchone()
 
-    sql = ''' INSERT INTO properties (Latitude, Longitude, 
+    # If exists, get the master_id
+    if result:
+        master_id = result[0]
+
+    else:
+        # If not exists, insert new record and get the master_id
+        sql_insert_masterid = ''' INSERT INTO master_id(latitude, longitude, titulo)
+                                      VALUES(?, ?, ?) '''
+        cur.execute(sql_insert_masterid, main)
+        master_id = cur.lastrowid
+
+    print("master_id: ", master_id)
+    return master_id
+def insert_or_update_property(conn,main,values):
+    """
+    Inserts property data into the database
+    :param conn: conection to database
+    :param main: main values of property [lat,long,title]
+    :param values: rest of the values
+    """
+
+    master_id = get_master_ids(conn,main)
+
+    sql = ''' INSERT INTO properties (ID,
                                       dias_desde_publicacion, 
                                       n_dormitorios, 
                                       n_banos, 
@@ -38,32 +64,34 @@ def insert_or_update_property(conn, property):
                                       tipo_inmueble, 
                                       orientacion,
                                       gastos_comunes, 
-                                      titulo, 
                                       link, 
                                       geo_ref_name, 
                                       listed)
-              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-              ON CONFLICT (Latitude, Longitude, titulo) DO UPDATE SET
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ON CONFLICT (ID) DO UPDATE SET
                   dias_desde_publicacion = EXCLUDED.dias_desde_publicacion,
                   link = EXCLUDED.link,
                   listed = EXCLUDED.listed
 
           '''
     cur = conn.cursor()
-    cur.execute(sql, property)
+    cur.execute(sql, (master_id,) + values)
     conn.commit()
 
-def insert_price_history(conn, latitude, longitude, titulo, price,Price_UF,tipo_operacion, date):
+
+def insert_price_history(conn,main, price, Price_UF,tipo_operacion,date):
     """Inserts price history data into the database"""
-    sql = ''' INSERT INTO price_history(Latitude, Longitude, titulo, Price, Price_UF,tipo_operacion, Date)
-              VALUES(?,?,?,?,?,?,?) 
+
+    master_id = get_master_ids(conn,main)
+
+    sql = ''' INSERT INTO price_history(ID, Price, Price_UF,tipo_operacion, Date)
+              VALUES(?,?,?,?,?) 
               '''
     cur = conn.cursor()
-    cur.execute(sql, (latitude, longitude, titulo, price, Price_UF,tipo_operacion, date))
+    cur.execute(sql, (master_id, price, Price_UF,tipo_operacion, date))
     conn.commit()
 
-
-def get_joined_data_as_dataframe(conn,threshold_date):
+def get_joined_data_as_dataframe(conn,threshold_date): # todo: FIX
     """
     Fetches the join of properties and price_history tables from the database
     and returns it as a pandas DataFrame.
@@ -76,7 +104,6 @@ def get_joined_data_as_dataframe(conn,threshold_date):
     """
 
     try:
-        # Use pandas to read the query result directly into a DataFrame
         df = pd.read_sql_query(join_query, conn)
         return df
     except Exception as e:
@@ -115,9 +142,14 @@ def create_conect_db(name):
 
     if check_db_exists:
 
+        sql_create_unique_id = """ CREATE TABLE IF NOT EXISTS master_id (
+                                            ID INTEGER PRIMARY KEY AUTOINCREMENT,
+                                            latitude REAL NOT NULL,
+                                            longitude REAL NOT NULL,
+                                            titulo TEXT NOT NULL); """
+
         sql_create_properties_table = """ CREATE TABLE IF NOT EXISTS properties (
-                                            Latitude REAL NOT NULL,
-                                            Longitude REAL NOT NULL,
+                                            ID INTEGER PRIMARY KEY, 
                                             dias_desde_publicacion REAL NOT NULL,
                                             n_dormitorios REAL ,
                                             n_banos REAL ,
@@ -131,23 +163,20 @@ def create_conect_db(name):
                                             tipo_inmueble TEXT ,
                                             orientacion TEXT ,
                                             gastos_comunes REAL,
-                                            titulo TEXT NOT NULL,
                                             link TEXT NOT NULL,
                                             geo_ref_name TEXT NOT NULL,
                                             listed BOOLEAN NOT NULL,
-                                            PRIMARY KEY (Latitude, Longitude, titulo)
+                                            FOREIGN KEY (ID) REFERENCES master_id (ID)
                                         ); """
 
         sql_create_price_history_table = """ CREATE TABLE IF NOT EXISTS price_history (
                                             PriceID INTEGER PRIMARY KEY AUTOINCREMENT,
-                                            Latitude REAL NOT NULL,
-                                            Longitude REAL NOT NULL,
-                                            titulo TEXT NOT NULL,
+                                            ID INTEGER, 
                                             Price REAL NOT NULL,
                                             Price_UF REAL NOT NULL,
                                             Date TEXT NOT NULL,
                                             tipo_operacion TEXT NOT NULL,
-                                            FOREIGN KEY (Latitude, Longitude, titulo) REFERENCES properties (Latitude, Longitude, titulo)
+                                            FOREIGN KEY (ID) REFERENCES master_id (ID)
                                         );"""
 
         sql_create_logs_table = """ CREATE TABLE IF NOT EXISTS logs (
@@ -159,6 +188,7 @@ def create_conect_db(name):
                                             solved_status BOOLEAN NOT NULL
                                             );"""
 
+        create_table(conn, sql_create_unique_id)
         create_table(conn, sql_create_properties_table)
         create_table(conn, sql_create_price_history_table)
         create_table(conn, sql_create_logs_table)
