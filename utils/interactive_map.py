@@ -3,12 +3,15 @@ import json
 import numpy as np
 from ipyleaflet import Map, DrawControl, TileLayer, GeoJSON
 from tqdm.auto import tqdm
+from database import DatabaseManager
+import ast
 
-class InteractiveMap:
+class InteractiveMap(DatabaseManager):
     """ class for handling maps with ipyleaflet """
     def __init__(self):
-        self.picked_pts_features = None
-        self.handle_draw = None
+        super().__init__()
+        self.selected_map_id = None
+        self.actions_list = None
         self.folder_save_name = None
         self.full_path = None
         self.json_polygon_path = None
@@ -17,9 +20,13 @@ class InteractiveMap:
         self.center_map_coordinates = None
 
 
-    def save_visualization_map_polygon_selection(self):
-        """ save map selection as html visualization """
-        path_save = os.path.join(self.full_path, f'{self.folder_save_name}.html')
+    def save_visualization_map_polygon_selection(self,path_save):
+        """
+        deprecated, need to be fixed
+        save map selection as html visualization
+        :param path_save: path, file must be html
+        """
+
         path_load = self.json_polygon_path
         with open(path_load, 'r') as json_file:
             data = json.load(json_file)
@@ -34,19 +41,6 @@ class InteractiveMap:
 
         map_to_save.add(geo_json)
         map_to_save.save(path_save)
-
-    def save_json_polygon_selection(self):
-        """ save map selection as json """
-        path_save = os.path.join(self.full_path, f'{self.folder_save_name}.json')
-        with open(path_save, 'w') as json_file:
-            json.dump(self.picked_pts_features[0], json_file)
-
-    def load_json_polygon_selection(self):
-        """ load map selection as json """
-        path_load = self.json_polygon_path
-        with open(path_load, 'r') as json_file:
-            self.picked_pts_features = [json.load(json_file)]
-
 
     def init_map_ipyflet(self, center_map_cordinates, theme="default", zoom=13, geojson_data=None):
         """ init Map from ipyfleet based con configurations"""
@@ -83,19 +77,43 @@ class InteractiveMap:
 
         return map
 
-    def map_picker(self):
+
+    def handle_draw(self, self_2, action, geo_json):
+        """internal thread of map picker to run funtions once the selection is completed"""
+        self.actions_list.append(action)
+
+        if action == 'created':
+            self.picked_pts_features.append(geo_json)
+            self.insert_new_cluser_map(self.folder_save_name, str(self.picked_pts_features))
+
+        elif action == 'deleted':
+            cleaned_geojson = [d for d in self.picked_pts_features if d.get('geometry') != geo_json.get('geometry')] # noqa
+            self.picked_pts_features = cleaned_geojson
+            self.insert_new_cluser_map(self.folder_save_name, str(self.picked_pts_features))
+
+
+    def get_geofences_center_coords(self):
+        """ get the mean coords for all geo fences in the current cluster map"""
+
+        if len(self.picked_pts_features) > 0:
+            total_coords = []
+            for data in self.picked_pts_features:
+                coords = np.asarray(data["geometry"]["coordinates"][0])
+                total_coords.append((np.mean(coords[:, 1]),np.mean(coords[:, 0])))
+
+            return tuple(np.mean(total_coords,axis=0))
+        else:
+            return (-33.4489, -70.6693)  # Stgo,Chile
+
+
+    def load_geojson_data(self):
         """
-            allows the user to pick from global map a location to search in
-            more themes: https://wiki.openstreetmap.org/wiki/Raster_tile_providers
-            """
-        self.main_interactive_map = self.init_map_ipyflet(theme=self.theme,
-                                                          center_map_cordinates=self.center_map_coordinates)
-
-        draw_control = DrawControl()
-
-        draw_control.on_draw(self.handle_draw)
-
-        self.main_interactive_map.add(draw_control)
-        display(self.main_interactive_map)  # NOQA
-
-        # self.bar.se = tqdm(total=100, desc="SELECT REGION TO ANALYSE. THEN RE-RUN PROGRAM")
+        load geojson data from database
+        :param selected_mapID: selected group id
+        """
+        df = self.get_maps_data(self.selected_map_id)
+        if len(df) > 0:
+            geojson_data = df.query(f"mapID == {self.selected_map_id}")["geojson_data"].values[0]
+            json_data_selected = ast.literal_eval(geojson_data)
+            self.folder_save_name = df.query(f"mapID == {self.selected_map_id}")["geo_ref_name"].values[0]
+            self.picked_pts_features = json_data_selected

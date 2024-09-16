@@ -40,11 +40,6 @@ class DataExtractor:
         self.tipo_operacion = None
 
 
-    def load_json_polygon_selection(self):
-        """ load map selection as json """
-        path_load = self.json_polygon_path
-        with open(path_load, 'r') as json_file:
-            self.picked_pts_features = [json.load(json_file)]
 
     @staticmethod
     def find_next_string(text, search_text):

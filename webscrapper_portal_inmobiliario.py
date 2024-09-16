@@ -1,14 +1,20 @@
 
-from tqdm.auto import tqdm
+
 from time import sleep, time
 import numpy as np
 from logs import log_exception_str
-from database import *
-
+from datetime import datetime
 import ssl
+import os
+import pandas as pd
+import ast
+from ipyleaflet import DrawControl
+from ipyleaflet import Map, TileLayer, DrawControl, GeoJSON
+
+from database import DatabaseManager
 from utils import WebDriver,ExchangeVariables,DataExtractor,InteractiveMap,ProgressBar
 
-class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,InteractiveMap,ProgressBar):
+class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,InteractiveMap,ProgressBar,DatabaseManager):
     """
     Created by Brian Lavin
     https://www.linkedin.com/in/brian-lavin/
@@ -16,15 +22,15 @@ class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,Int
     webscrappoing data from portal inmobiliario
     Works drawing a POLYGON into the map
     https://www.portalinmobiliario.com/
-    :param tipo_operacion: select one -> ["arriendo","venta"]
     :param tipo_inmueble: select one -> ["casa","departamento"]
     :param theme: select one -> ["dark","default","white"]
     :return: df_results, xlsx file (optional)
     """
 
-    def __init__(self, tipo_operacion, tipo_inmueble, theme="default", folder_save_name: str = None, debug=False):
+    def __init__(self):
         super().__init__()
 
+        self.conn_map = None
         self.list_geo_urls_pages = []
         self.usd_clp = None
         self.table_data = None
@@ -44,7 +50,6 @@ class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,Int
         self.estacionamientos = []
         self.superficie_util = []
         self.superficie_total = []
-        self.picked_pts_features = []
         self.metraje_total = []
         self.metraje_util = []
         self.ubicacion = []
@@ -60,6 +65,7 @@ class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,Int
         self.error_soups = []  #  DEBUG
         self.error_links = []  #  DEBUG
 
+        self.actions_list = []
         self.total_dict_properties = None
         self.main_soup = None
         self.uf = None
@@ -74,55 +80,82 @@ class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,Int
         self.df_inversion_arriendo = None
         self.full_path = None
         self.current_url = None
-
+        self.last_wea = None
         # keep this line only if you trust your proxy provider
         ssl._create_default_https_context = ssl._create_unverified_context # NOQA.
 
         self.database_name = "real_state.db"
-        self.current_time_str = datetime.now().strftime('%H%M_%d_%m_%y')
-        self.theme = theme
+        self.conn = self.create_conect_db(self.database_name)  # it creates only if it doesn't exist
 
-        self.center_map_coordinates = (-33.4489, -70.6693)  # Stgo,Chile
+        self.current_time_str = datetime.now().strftime('%H%M_%d_%m_%y')
+        self.theme = "default"
 
         self.tipo_operacion = None
-        self.type = tipo_inmueble
-
-        if not isinstance(folder_save_name, str):
-            raise ValueError("folder_save_name must be a string")
-
-        self.folder_save_name = folder_save_name
-        self.create_results_folder()
+        self.picked_pts_features = []
 
         self.get_uf_today()
         self.get_today_USD_CLP_value()
-        self.init_webdriver(get_images=True)
-        self.init_progress_bar(max_len = 100)
         self.total_number_request = 0
 
-        if not debug:
-            self.conn_db = create_conect_db(self.database_name)  # it creates only if it doesn't exist
-            self.check_if_existing_property_project()
+        # self.conn.close() # todo: this should be after all the downloading
 
-    def check_if_existing_property_project(self):
+    def start_download(self,selected_mapID, tipo_inmueble):
         """ if is already a folder with a poly selection. SKIP poly selection and just download the new data of the location """
 
-        self.json_polygon_path = os.path.join(self.full_path, f'{self.folder_save_name}.json')  # NOQA
-        if not os.path.exists(self.json_polygon_path):
-            self.map_picker()
-        else:
-            try:
-                self.load_json_polygon_selection()
-                self.bar_set(f"UPDATING data for location found in {self.folder_save_name}")
-                self.execute_main_process()
+        self.type = tipo_inmueble
+        self.init_webdriver(get_images=True)
+        self.init_progress_bar(max_len = 100)
+        self.selected_map_id = selected_mapID
 
-            except Exception as e:
-                self.bar_set("Error, please check log file   ")
-                insert_error_log(self.conn_db,
-                                 self.folder_save_name,
+        try:
+            self.load_geojson_data()
+            self.bar_set(f"Loading db...")
+            self.execute_main_process()
+
+        except Exception as e:
+            self.bar_set("Error, please check log file   ")
+            self.insert_error_log(self.folder_save_name,
                                  datetime.now(),
                                  self.current_url,
                                  log_exception_str(exception=e),
                                  False)
+
+
+    def vis_map(self,selected_mapID):
+        """
+        Execute main map visualization and load the selected map group. allows to create and delete polygons
+        :param selected_mapID:
+        :return:
+        """
+        df = self.get_maps_data(selected_mapID)
+        if len(df) > 0:
+            geojson_data = df.query(f"mapID == {selected_mapID}")["geojson_data"].values[0]
+            json_data_selected = ast.literal_eval(geojson_data)
+            self.folder_save_name = df.query(f"mapID == {selected_mapID}")["geo_ref_name"].values[0]
+            self.picked_pts_features = json_data_selected
+            print(f"{self.folder_save_name} --> Sucess!")
+        else:
+            raise ValueError("No maps found for that mapID")
+
+        main_interactive_map = self.init_map_ipyflet(theme=self.theme,
+                                                     center_map_cordinates=self.get_geofences_center_coords(), # make center dinamic
+                                                     geojson_data=None,
+                                                     zoom=14)
+
+        draw_control = DrawControl(
+            rectangle={},
+            circlemarker={},
+            polyline={})
+
+        draw_control.on_draw(self.handle_draw)
+        main_interactive_map.add(draw_control)
+
+
+        draw_control.clear_polygons()
+        draw_control.clear()
+        draw_control.data = self.picked_pts_features
+
+        display(main_interactive_map)  # NOQA
 
     def empty_lists_except_specific(self, keep):
         """ clear all lists in the class to store new data, except the one to keep [polygon coordinates]"""
@@ -175,7 +208,7 @@ class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,Int
                     self.init_webdriver(get_images=False)
 
             except Exception as e:
-                insert_error_log(self.conn_db,
+                self.insert_error_log(
                                  self.folder_save_name,
                                  datetime.now(),
                                  self.current_url,
@@ -229,7 +262,7 @@ class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,Int
         """ adds the results from df to the database"""
 
         for i, row in self.df_results.iterrows():
-            insert_or_update_property(self.conn_db,
+            self.insert_or_update_property(
                                       (row.latitud,row.longitud,row.titulo),
                                       (row.dias_desde_publicacion,
                                              row.n_dormitorios,
@@ -245,9 +278,9 @@ class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,Int
                                              row.orientacion,
                                              row.gastos_comunes,
                                              row.link,
-                                             self.folder_save_name,
+                                             self.selected_map_id,
                                              True))
-            insert_price_history(self.conn_db,
+            self.insert_price_history(
                                  (row.latitud,row.longitud,row.titulo),
                                  row.precio,
                                  row.precio_UF,
@@ -268,8 +301,6 @@ class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,Int
     def execute_main_process(self):
         """ main process"""
 
-        # ARRIENDO
-        self.tipo_operacion = "arriendo"
         self.extract_urls_from_main_page_geo()
 
         self.bar_update(new_len=len(self.cards_urls),
@@ -278,21 +309,11 @@ class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,Int
 
         self.compile_results_df()
 
-        delist_all_properties(self.conn_db)  # all properties become delisted , unless they are still posted online
+        self.delist_all_properties()  # all properties become delisted , unless they are still posted online
         self.compile_results_df_to_db()
-        self.conn_db.close()
+        self.conn.close()
 
         self.bar_set("completed!  ")
 
-    def handle_draw(self, self_2, action, geo_json):
-        """internal thread of map picker to run funtions once the selection is completed"""
-        try:
-            # save of picked point
-            self.picked_pts_features.append(geo_json)
-            # self.save_json_polygon_selection()
-            # self.execute_main_process()
-            # self.save_visualization_map_polygon_selection()
 
-        except Exception as e:
-            self.bar_set("Error, please check log file   ")
 

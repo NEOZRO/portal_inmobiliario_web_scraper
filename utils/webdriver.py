@@ -15,8 +15,9 @@ from selenium.webdriver.common.by import By
 
 import numpy as np
 from utils.data_extractors import DataExtractor
+from utils.progress_bar import ProgressBar
 
-class WebDriver(DataExtractor):
+class WebDriver(DataExtractor,ProgressBar):
     """ webdriver class with all the functions """
 
     def __init__(self):
@@ -109,7 +110,7 @@ class WebDriver(DataExtractor):
             self.close_webdriver()
             self.init_webdriver(get_images=True)
             self.webdriver_request(url, wait, xpath_wait)
-            print("restarting webdriver because xpath not found")
+            self.bar_set("Extracting url's from main pages. Restarting webdriver...")
 
         soup = BeautifulSoup(self.driver.page_source, 'html.parser')
 
@@ -181,9 +182,9 @@ class WebDriver(DataExtractor):
         self.total_number_of_properties = self.get_total_number_of_properties_in_location(min_lat, max_lat, min_lon,
                                                                                           max_lon)
 
-        print(f"*** total number of properties: \n arriendo {self.total_number_of_properties[0]}\n venta {self.total_number_of_properties[1]}")
-
         n_main_pages = np.ceil(self.total_number_of_properties/ 50).astype(int)
+
+        self.bar_update(n_main_pages.sum(),"Extracting url's from main pages")
 
         for j, n_pages in enumerate(n_main_pages): # for every type of operation
             self.current_type_operation = tipos_de_operacion[j]
@@ -192,8 +193,6 @@ class WebDriver(DataExtractor):
                 url_extra_string = "_Desde_" + str(int(np.floor((i - 1) / 2) * 100 + 1)) if i >= 3 else ""
                 geo_url = f"https://www.portalinmobiliario.com/{self.current_type_operation}/{self.type}/{url_extra_string}_DisplayType_M_item*location_lat:{min_lat}*{max_lat},lon:{min_lon}*{max_lon}#{i}"
 
-                print(f"*** url: {geo_url}")
-                print("------------------------")
                 self.current_url = geo_url
                 self.main_soup = self.webdriver_request(geo_url,
                                                         wait=4,
@@ -201,6 +200,7 @@ class WebDriver(DataExtractor):
 
                 self.get_layout_cards_containers()
             self.get_urls_from_containers()
+            self.bar.update(1)
 
         self.list_operations = ["arriendo"] * self.dict_len_type_operations["arriendo"] + ["venta"] *self.dict_len_type_operations["venta"]
 
@@ -263,7 +263,6 @@ class WebDriver(DataExtractor):
             soup = self.webdriver_request(url)
 
         except:
-            # self.bar_progress_get_data.set_description(f'{self.tipo_operacion}: Obtaining data...[changing proxy]')
             self.ip_status_index += 1
             self.close_webdriver()
             self.init_webdriver(get_images=False)
@@ -274,12 +273,10 @@ class WebDriver(DataExtractor):
 
         iter_count=0
         while self.check_if_location_not_avaliable(soup) or not self.check_if_table_properties_avaliable(soup): # noqa
-            # self.bar_progress_get_data.set_description(f'{self.tipo_operacion}: Obtaining data...[get right soup {iter_count}]')
             iter_count+=1
             soup = self.webdriver_refresh(wait=4)
 
             if iter_count > 5:
-                # self.bar_progress_get_data.set_description(f'{self.tipo_operacion}: Obtaining data...[get right soup - RESTARTING]')
                 self.close_webdriver()
                 self.init_webdriver(get_images=False)
                 print("Restarting webdriver, from get correct soup")
