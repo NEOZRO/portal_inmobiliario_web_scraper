@@ -7,6 +7,8 @@ class DataExtractor:
     """ class for extracting data from website/soups """
     def __init__(self):
 
+        self.list_operations = []
+        self.list_tipos_inmueble = []
         self.current_type_operation = None
         self.dict_len_type_operations = None
         self.GC = None
@@ -34,7 +36,6 @@ class DataExtractor:
         self.main_soup = None
         self.picked_pts_features = None
         self.cards_urls = []
-        self.cards_containers = []
         self.geo_url_main = None
         self.type = None
         self.tipo_operacion = None
@@ -63,23 +64,17 @@ class DataExtractor:
             return None
 
 
-    def get_layout_cards_containers(self):
-        """
-        get all cards containers inside main page of search
-        """
-
-        self.cards_containers.extend(
-            self.main_soup.find_all('div', {'class': 'ui-search-map-list ui-search-map-list__item'}))
-
     def get_urls_from_containers(self):
         """
         get all cards urls from each containers/cards list
         """
-        for container in self.cards_containers:
+
+        container_list = self.main_soup.find_all('div', {'class': 'ui-search-map-list ui-search-map-list__item'})
+        for container in container_list:
             url = container.find('a', class_='ui-search-result__main-image-link ui-search-link')['href']
             self.cards_urls.append(url)
-            if url:
-                self.dict_len_type_operations[self.current_type_operation]+=1
+            self.list_tipos_inmueble.append(self.type)
+            self.list_operations.append(self.tipo_operacion)
 
 
     def get_price_from_soup(self, soup):
@@ -201,7 +196,8 @@ class DataExtractor:
 
     def check_if_location_not_avaliable(self, soup):
         """ check if location loaded correctly """
-        return len(soup.find_all('div', {"id": "ui-vip-location__map"})) == 0
+        len_locations_found = len(soup.find_all('div', {"id": "ui-vip-location__map"}))
+        return len_locations_found == 0
 
     def init_dict_properties(self):
         """

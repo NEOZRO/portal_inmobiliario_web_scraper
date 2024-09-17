@@ -12,9 +12,9 @@ from ipyleaflet import DrawControl
 from ipyleaflet import Map, TileLayer, DrawControl, GeoJSON
 
 from database import DatabaseManager
-from utils import WebDriver,ExchangeVariables,DataExtractor,InteractiveMap,ProgressBar
+from utils import WebDriver,ExchangeVariables,DataExtractor,InteractiveMap,ProgressBar,Analytics
 
-class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,InteractiveMap,ProgressBar,DatabaseManager):
+class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,InteractiveMap,ProgressBar,DatabaseManager,Analytics):
     """
     Created by Brian Lavin
     https://www.linkedin.com/in/brian-lavin/
@@ -59,8 +59,9 @@ class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,Int
         self.n_banos = []
         self.n_dormitorios = []
         self.metraje = []
-        self.cards_containers = []
         self.cards_urls = []
+        self.list_operations = []
+        self.list_tipos_inmueble = []
         self.error_msg = []  #   DEBUG
         self.error_soups = []  #  DEBUG
         self.error_links = []  #  DEBUG
@@ -97,12 +98,13 @@ class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,Int
         self.get_today_USD_CLP_value()
         self.total_number_request = 0
 
-        # self.conn.close() # todo: this should be after all the downloading
+        self.analysis_results={}
 
-    def start_download(self,selected_mapID, tipo_inmueble):
+
+    def start_download(self,selected_mapID):
         """ if is already a folder with a poly selection. SKIP poly selection and just download the new data of the location """
 
-        self.type = tipo_inmueble
+        self.empty_lists_except_specific(self.picked_pts_features)
         self.init_webdriver(get_images=True)
         self.init_progress_bar(max_len = 100)
         self.selected_map_id = selected_mapID
@@ -113,12 +115,8 @@ class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,Int
             self.execute_main_process()
 
         except Exception as e:
-            self.bar_set("Error, please check log file   ")
-            self.insert_error_log(self.folder_save_name,
-                                 datetime.now(),
-                                 self.current_url,
-                                 log_exception_str(exception=e),
-                                 False)
+            self.bar_set("Error during main process")
+            print(e)
 
 
     def vis_map(self,selected_mapID):
@@ -175,7 +173,8 @@ class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,Int
 
         for i, url in enumerate(self.cards_urls):
 
-            self.tipo_operacion = self.list_operations[i]
+            operacion = self.list_operations[i]
+            tipo = self.list_tipos_inmueble[i]
             title, latitud, longitud, price_value, n_days_since_published = self.init_main_properties()
             self.init_dict_properties()
 
@@ -186,22 +185,22 @@ class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,Int
 
                 init_time = time()
 
-                self.bar_set(f'{self.tipo_operacion}: Obtaining data...[get right soup]')
+                self.bar_set(f'{operacion}/{tipo}: Obtaining data...[get right soup]')
                 soup = self.get_correct_soup_from_url(url)
 
-                self.bar_set(f'{self.tipo_operacion}: Obtaining data...[data from table]')
+                self.bar_set(f'{operacion}/{tipo}: Obtaining data...[data from table]')
                 self.get_data_from_table_in_url()
 
-                self.bar_set(f'{self.tipo_operacion}: Obtaining data...[extracting features]')
+                self.bar_set(f'{operacion}/{tipo}: Obtaining data...[extracting features]')
                 title, latitud, longitud, price_value, n_days_since_published = self.get_main_properties_from_soup(soup)
 
-                self.bar_set(f'{self.tipo_operacion}: Obtaining data...[saving results]')
+                self.bar_set(f'{operacion}/{tipo}: Obtaining data...[saving results]')
                 self.append_all_propierties(title,latitud,longitud,price_value,n_days_since_published)
 
                 end_time = time()
 
                 if self.total_number_request >= 100 or end_time - init_time > 20:
-                    self.bar_set(f'{self.tipo_operacion}: Obtaining data...[Changing proxy]')
+                    self.bar_set(f'{operacion}/{tipo}: Obtaining data...[Changing proxy]')
                     self.ip_status_index += 1
                     self.close_webdriver()
                     sleep(5)
@@ -224,7 +223,7 @@ class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,Int
 
                 end_time = time()
                 if self.total_number_request >= 100 or end_time - init_time > 20: # NOQA
-                    self.bar_set(f'{self.tipo_operacion}: Obtaining data...[Changing proxy]')
+                    self.bar_set(f'{operacion}/{tipo}: Obtaining data...[Changing proxy]')
                     self.ip_status_index += 1
                     self.close_webdriver()
                     sleep(5)
@@ -250,7 +249,7 @@ class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,Int
             "antiguedad": self.antiguedad,
             "cantidad_pisos_edificio": self.cantidad_pisos,
             "piso_unidad": self.piso_unidad,
-            "tipo_inmueble": self.tipo_inmueble,
+            "tipo_inmueble": self.list_tipos_inmueble,
             "orientacion": self.orientacion,
             "gastos_comunes": self.GC,
             "titulo": self.title,
@@ -282,6 +281,7 @@ class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,Int
                                              True))
             self.insert_price_history(
                                  (row.latitud,row.longitud,row.titulo),
+                                 self.selected_map_id,
                                  row.precio,
                                  row.precio_UF,
                                  self.list_operations[i],
@@ -315,5 +315,14 @@ class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,Int
 
         self.bar_set("completed!  ")
 
+    def get_df_caprates(self,map_id,threshold_date=None):
+        """
+        generate the dataframe for the caprates
+        :param date_string: format %YYYY-%mm-%dd
+        """
+        if threshold_date is None:
+            threshold_date = datetime.today().strftime('%Y-%m-%d')
 
+        self.get_joined_data_as_dataframe(threshold_date,map_id)
+        self.generate_df_caprates()
 

@@ -23,6 +23,10 @@ class WebDriver(DataExtractor,ProgressBar):
     def __init__(self):
         super().__init__()
 
+        self.total_number_of_properties_pages = None
+        self.operation = None
+        self.list_tipos_inmueble = None
+        self.n_properties_dict = None
         self.list_operations = None
         self.dict_len_type_operations={"arriendo":0, "venta":0}
         self.current_type_operation = []
@@ -30,7 +34,6 @@ class WebDriver(DataExtractor,ProgressBar):
         self.previus_ip_index = -1
         self.download_chrome_webdriver()
         self.current_url = None
-        self.total_number_of_properties = None
         self.picked_pts_features = None
         self.type = None
         self.tipo_operacion = None
@@ -41,12 +44,20 @@ class WebDriver(DataExtractor,ProgressBar):
 
     def proxy_generate_bright_data(self):
 
-        username = 'brd-customer-hl_fb6fe685-zone-residential_proxy1'
-        password = 'wywp20qz9f5u'
+        # username = 'brd-customer-hl_fb6fe685-zone-residential_proxy1'
+        # password = 'wywp20qz9f5u'
+        # port = 22225
+        # session_id  = random.random()
+        # super_proxy_url = ('http://%s-session-%s:%s@brd.superproxy.io:%d' %
+        #                    (username, session_id, password, port))
+
+        username = 'brd-customer-hl_aaf60d4d-zone-residential_proxy_x'
+        password = '0r3sudcgsaud'
         port = 22225
-        session_id  = random.random()
+        session_id = random.random()
         super_proxy_url = ('http://%s-session-%s:%s@brd.superproxy.io:%d' %
                            (username, session_id, password, port))
+
         print("proxy enabled!, random session id: ", session_id)
         return super_proxy_url
     @staticmethod
@@ -134,38 +145,35 @@ class WebDriver(DataExtractor,ProgressBar):
         self.driver.quit()
         self.total_number_request = 0
 
-    def get_total_number_of_properties_in_location(self, min_lat, max_lat, min_lon, max_lon):
+    def get_total_number_of_properties_in_location(self, min_lat, max_lat, min_lon, max_lon, operacion, tipo):
         """
         get total number of properties in location
         :param lat-log: latitude and longitud of the location/area
         :return: number of properties in location
         """
-        number_of_properties = []
-        self.geo_url_main = [f"https://www.portalinmobiliario.com/{operacion}/{self.type}/_DisplayType_M_item*location_lat:{min_lat}*{max_lat},lon:{min_lon}*{max_lon}" for operacion in
-                             ["arriendo", "venta"]]
+        self.geo_url_main = f"https://www.portalinmobiliario.com/{operacion}/{tipo}/_DisplayType_M_item*location_lat:{min_lat}*{max_lat},lon:{min_lon}*{max_lon}"
 
-        for url in self.geo_url_main:
-            soup = self.webdriver_request(url,wait=3)
-            search_text = 'melidata("add", "event_data", {"vertical":"REAL_ESTATE","query":"","limit":100,"offset":0,"total":'
+        soup = self.webdriver_request(self.geo_url_main,wait=3)
+        search_text = 'melidata("add", "event_data", {"vertical":"REAL_ESTATE","query":"","limit":100,"offset":0,"total":'
 
+        text = str(soup)
+        search_text_index  = text.find(search_text)
+
+        while search_text_index == -1:
+            soup = self.webdriver_refresh(2)
             text = str(soup)
             search_text_index  = text.find(search_text)
 
-            while search_text_index == -1:
-                soup = self.webdriver_refresh(2)
-                text = str(soup)
-                search_text_index  = text.find(search_text)
+        text_number = self.find_next_string(text,
+                                            search_text).split(",")
 
-            text_number = self.find_next_string(text,
-                                                search_text).split(",")
+        if text_number:
+            n_real_state = int(text_number[0])
+        else:
+            n_real_state = 0
 
-            if text_number:
-                n_real_state = int(text_number[0])
-                number_of_properties.append(n_real_state)
-            else:
-                number_of_properties.append(0)
-
-        return np.asarray(number_of_properties)
+        self.total_number_of_properties_pages += np.ceil(n_real_state/ 50).astype(int)
+        self.n_properties_dict[tipo][operacion] = n_real_state
 
     def extract_urls_from_main_page_geo(self):
         """
@@ -178,31 +186,42 @@ class WebDriver(DataExtractor,ProgressBar):
         max_lat = np.max(polygon_coordinates[:, 1])
         min_lat = np.min(polygon_coordinates[:, 1])
 
+        tipos_inmueble = ["casa","departamento"]
         tipos_de_operacion = ["arriendo", "venta"]
-        self.total_number_of_properties = self.get_total_number_of_properties_in_location(min_lat, max_lat, min_lon,
-                                                                                          max_lon)
+        self.n_properties_dict = {}
+        self.total_number_of_properties_pages = 0
+        self.cards_urls = []
 
-        n_main_pages = np.ceil(self.total_number_of_properties/ 50).astype(int)
+        for tipo in tipos_inmueble:
+            self.type = tipo
+            self.n_properties_dict[tipo] = {}
+            for operacion in tipos_de_operacion:
+                self.get_total_number_of_properties_in_location(min_lat,
+                                                                max_lat,
+                                                                min_lon,
+                                                                max_lon,
+                                                                operacion,
+                                                                tipo)
 
-        self.bar_update(n_main_pages.sum(),"Extracting url's from main pages")
 
-        for j, n_pages in enumerate(n_main_pages): # for every type of operation
-            self.current_type_operation = tipos_de_operacion[j]
-            self.cards_containers = []
-            for i in range(1, n_pages + 1):
-                url_extra_string = "_Desde_" + str(int(np.floor((i - 1) / 2) * 100 + 1)) if i >= 3 else ""
-                geo_url = f"https://www.portalinmobiliario.com/{self.current_type_operation}/{self.type}/{url_extra_string}_DisplayType_M_item*location_lat:{min_lat}*{max_lat},lon:{min_lon}*{max_lon}#{i}"
+        total = self.total_number_of_properties_pages
+        self.bar_update(total,"Extracting url's from main pages")
 
-                self.current_url = geo_url
-                self.main_soup = self.webdriver_request(geo_url,
-                                                        wait=4,
-                                                        xpath_wait="//div[@class='ui-search-map-list ui-search-map-list__item']")  # pair n_page takes time to update links
+        for tipo in tipos_inmueble:
+            for operacion in tipos_de_operacion:
+                self.type = tipo
+                self.tipo_operacion = operacion
+                n_main_pages = np.ceil(self.n_properties_dict[tipo][operacion]/ 50).astype(int)
+                for i in range(1, n_main_pages + 1):
+                    url_extra_string = "_Desde_" + str(int(np.floor((i - 1) / 2) * 100 + 1)) if i >= 3 else ""
+                    geo_url = f"https://www.portalinmobiliario.com/{operacion}/{tipo}/{url_extra_string}_DisplayType_M_item*location_lat:{min_lat}*{max_lat},lon:{min_lon}*{max_lon}#{i}"
 
-                self.get_layout_cards_containers()
-            self.get_urls_from_containers()
-            self.bar.update(1)
-
-        self.list_operations = ["arriendo"] * self.dict_len_type_operations["arriendo"] + ["venta"] *self.dict_len_type_operations["venta"]
+                    self.current_url = geo_url
+                    self.main_soup = self.webdriver_request(geo_url,
+                                                            wait=4,
+                                                            xpath_wait="//div[@class='ui-search-map-list ui-search-map-list__item']")  # pair n_page takes time to update links
+                    self.get_urls_from_containers()
+                    self.bar.update(1)
 
 
     def get_data_real_state_table(self, soup):
@@ -215,7 +234,7 @@ class WebDriver(DataExtractor,ProgressBar):
         open_bracket_index = 0
         close_bracket_index = -1
         main_text = str(soup)
-        search_text = "Características del inmueble" # main identifier of the table in lazyload state
+        search_text = '"Características del inmueble",' # main identifier of the table in lazyload state
         index = main_text.find(search_text)
         next_index = index + len(search_text)
 
@@ -276,7 +295,7 @@ class WebDriver(DataExtractor,ProgressBar):
             iter_count+=1
             soup = self.webdriver_refresh(wait=4)
 
-            if iter_count > 5:
+            if iter_count > 3:
                 self.close_webdriver()
                 self.init_webdriver(get_images=False)
                 print("Restarting webdriver, from get correct soup")

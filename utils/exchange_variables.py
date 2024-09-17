@@ -15,15 +15,16 @@ class ExchangeVariables:
         return unit of UF of today to make convertion of prices later
         Sometimes at night the website is  updated with the UF value  of zero, affecting the price convertions
         """
-        url_uf = 'https://www.uf-hoy.com/'
-        div_id = 'valor_uf'
+        url_uf = "https://valoruf.cl/"
+        type = "span"
+        id = 'vpr'
         response = requests.get(url_uf)
 
         if response.status_code == 200:
             soup = BeautifulSoup(response.content, 'html.parser')
-            div = soup.find('div', {'id': div_id})
+            div = soup.find(type, {'class': id})
 
-            integer = int(div.get_text().split(",")[0].replace(".", ""))
+            integer = int(div.get_text().split(",")[0].split("$")[1].replace(".", ""))
             decimals = int(div.get_text().split(",")[1])
 
             value = integer + decimals / 100
