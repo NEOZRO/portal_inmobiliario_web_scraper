@@ -15,7 +15,7 @@ def remove_outliers(self, column_name):
 
 pd.DataFrame.remove_outliers = remove_outliers
 
-class Analytics():
+class Analytics:
     """ class to process database results """
     def __init__(self):
         self.df_analysis = None
@@ -23,6 +23,8 @@ class Analytics():
 
 
     def generate_df_caprates(self):
+
+        self.df_analysis.superficie_util = self.df_analysis.superficie_util.replace(0.0,np.nan)
 
         for tipo in ["casa","departamento"]:
             print(f"analizando {tipo}")

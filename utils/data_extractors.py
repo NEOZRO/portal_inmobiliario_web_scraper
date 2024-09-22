@@ -135,8 +135,10 @@ class DataExtractor:
             "ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-header__bottom-subtitle",
             "ui-pdp-background-color--WHITE ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-header__bottom-subtitle",
             "ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-seller-validated__title",
+            "ui-pdp-color--GRAY ui-pdp-size--XXSMALL ui-pdp-family--REGULAR ui-pdp-seller-validated__title",
             "ui-pdp-subtitle ui-pdp-subtitle_rex"]
         list_types_publications_days = [
+            "p",
             "p",
             "p",
             "p",
@@ -147,7 +149,6 @@ class DataExtractor:
             if index_grabber < len(list_grabbers_publications_days):
                 days_publication_line = soup.find_all(list_types_publications_days[index_grabber],
                                                       list_grabbers_publications_days[index_grabber])
-
 
                 if days_publication_line:
 
@@ -196,8 +197,11 @@ class DataExtractor:
 
     def check_if_location_not_avaliable(self, soup):
         """ check if location loaded correctly """
-        len_locations_found = len(soup.find_all('div', {"id": "ui-vip-location__map"}))
-        return len_locations_found == 0
+        if soup is not None:
+            len_locations_found = len(soup.find_all('div', {"id": "ui-vip-location__map"}))
+            return len_locations_found == 0
+        else:
+            return True
 
     def init_dict_properties(self):
         """
