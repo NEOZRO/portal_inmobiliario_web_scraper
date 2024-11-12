@@ -3,7 +3,7 @@
 
 The search for housing is a complex and tedious process. 
 To simplify it, I set out to create a tool that searches for investment opportunities, 
-specifically on the future line 8 of the subway, taking advantage of the potential appreciation
+specifically on the future line 8 of the subway (Stgo,Chile), taking advantage of the potential appreciation
 of real estate.
 
 ![Alt text](readme_images/map_anim.gif "Optional title")
