@@ -114,6 +114,12 @@ class InteractiveMap(DatabaseManager):
         df = self.get_maps_data(self.selected_map_id)
         if len(df) > 0:
             geojson_data = df.query(f"mapID == {self.selected_map_id}")["geojson_data"].values[0]
-            json_data_selected = ast.literal_eval(geojson_data)
             self.folder_save_name = df.query(f"mapID == {self.selected_map_id}")["geo_ref_name"].values[0]
-            self.picked_pts_features = json_data_selected
+
+            json_data_selected = ast.literal_eval(geojson_data)
+            return json_data_selected
+
+            # self.picked_pts_features = json_data_selected
+
+        else:
+            raise ValueError("No maps data in db")

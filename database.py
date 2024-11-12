@@ -321,9 +321,10 @@ class DatabaseManager:
 
         self.create_conect_db(self.database_name)
         join_query = f"""
-            SELECT properties.*, price_history.Price, price_history.Price_UF, price_history.tipo_operacion, price_history.Date
+            SELECT properties.*, price_history.Price, price_history.Price_UF, price_history.tipo_operacion, price_history.Date, master_id.latitude, master_id.longitude
             FROM properties
             JOIN price_history ON properties.ID = price_history.ID
+            JOIN master_id ON properties.ID = master_id.ID
             WHERE price_history.Date > '{threshold_date}' and properties.mapID = {map_id};
             """
 

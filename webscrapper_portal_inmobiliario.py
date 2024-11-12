@@ -106,13 +106,19 @@ class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,Int
 
         self.empty_lists_except_specific(self.picked_pts_features)
         self.init_webdriver(get_images=True)
-        self.init_progress_bar(max_len = 100)
         self.selected_map_id = selected_mapID
 
         try:
-            self.load_geojson_data()
-            self.bar_set(f"Loading db...")
-            self.execute_main_process()
+            georef_list = self.load_geojson_data()
+            for i, georef in enumerate(georef_list):
+                self.init_progress_bar(max_len = 100)
+                self.picked_pts_features = [georef]
+                self.bar_set(f"Loading db n° {i+1}...")
+                self.execute_main_process()
+                self.empty_lists_except_specific(self.picked_pts_features)
+
+            self.conn.close()
+            self.bar_set("completed!  ")
 
         except Exception as e:
             self.bar_set("Error during main process")
@@ -311,9 +317,7 @@ class WebScraperPortalInmobiliario(WebDriver,ExchangeVariables,DataExtractor,Int
 
         self.delist_all_properties()  # all properties become delisted , unless they are still posted online
         self.compile_results_df_to_db()
-        self.conn.close()
 
-        self.bar_set("completed!  ")
 
     def get_df_caprates(self,map_id,threshold_date=None):
         """

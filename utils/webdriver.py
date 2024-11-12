@@ -30,8 +30,9 @@ class WebDriver(DataExtractor,ProgressBar):
         self.list_operations = None
         self.dict_len_type_operations={"arriendo":0, "venta":0}
         self.current_type_operation = []
-        self.ip_status_index = 1  # Set to zero to start with our ip at first
+        self.ip_status_index = 0  # Set to zero to start with our ip at first
         self.previus_ip_index = -1
+        self.use_proxy = False
         self.download_chrome_webdriver()
         self.current_url = None
         self.picked_pts_features = None
@@ -42,24 +43,14 @@ class WebDriver(DataExtractor,ProgressBar):
         self.uf = None
 
 
-    def proxy_generate_bright_data(self):
+    def proxy_generate(self):
+        """ generate a rotative proxy"""
 
-        # username = 'brd-customer-hl_fb6fe685-zone-residential_proxy1'
-        # password = 'wywp20qz9f5u'
-        # port = 22225
-        # session_id  = random.random()
-        # super_proxy_url = ('http://%s-session-%s:%s@brd.superproxy.io:%d' %
-        #                    (username, session_id, password, port))
+        # PUT YOUR API PROXY PROVIDER HERE
+        pass
+        # return proxy_url
+        return None
 
-        username = 'brd-customer-hl_aaf60d4d-zone-residential_proxy_x'
-        password = '0r3sudcgsaud'
-        port = 22225
-        session_id = random.random()
-        super_proxy_url = ('http://%s-session-%s:%s@brd.superproxy.io:%d' %
-                           (username, session_id, password, port))
-
-        print("proxy enabled!, random session id: ", session_id)
-        return super_proxy_url
     @staticmethod
     def download_chrome_webdriver():
         """ simple execution to download chrome webdriver in the initialization """
@@ -79,8 +70,8 @@ class WebDriver(DataExtractor,ProgressBar):
         chrome_options.add_argument(f'user-agent={ua.random}')  # random user agent
 
         # proxy
-        if self.ip_status_index > 0 and self.ip_status_index > self.previus_ip_index:
-            proxy = self.proxy_generate_bright_data()
+        if self.ip_status_index >= 0 and self.ip_status_index > self.previus_ip_index and self.use_proxy:
+            proxy = self.proxy_generate()
             chrome_options.proxy = Proxy({ 'proxyType': ProxyType.MANUAL, 'httpProxy' : proxy,"sslProxy":proxy})
             self.previus_ip_index=self.ip_status_index
 
@@ -277,6 +268,7 @@ class WebDriver(DataExtractor,ProgressBar):
          This function verify if url is correct to extract more data
         :return: return the soup of correct page
         """
+        soup = None
         try: # to catch timeout exceptions
 
             soup = self.webdriver_request(url)
@@ -297,7 +289,9 @@ class WebDriver(DataExtractor,ProgressBar):
 
             if iter_count > 3:
                 self.close_webdriver()
+                self.ip_status_index += 1
                 self.init_webdriver(get_images=False)
+                soup = self.webdriver_request(url)
                 print("Restarting webdriver, from get correct soup")
                 iter_count=0
 

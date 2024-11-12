@@ -136,33 +136,35 @@ class DataExtractor:
             "ui-pdp-background-color--WHITE ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-header__bottom-subtitle",
             "ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--REGULAR ui-pdp-seller-validated__title",
             "ui-pdp-color--GRAY ui-pdp-size--XXSMALL ui-pdp-family--REGULAR ui-pdp-seller-validated__title",
-            "ui-pdp-subtitle ui-pdp-subtitle_rex"]
+            "ui-pdp-subtitle ui-pdp-subtitle_rex",
+            "ui-pdp-background-color--LIGHT_GRAY ui-pdp-color--GRAY ui-pdp-size--XSMALL ui-pdp-family--SEMIBOLD ui-pdp-header__bottom-subtitle"]
         list_types_publications_days = [
             "p",
             "p",
             "p",
             "p",
-            "span"]
+            "span",
+            "p"]
         index_grabber = 0
 
         while True: # make break condition and a break
             if index_grabber < len(list_grabbers_publications_days):
                 days_publication_line = soup.find_all(list_types_publications_days[index_grabber],
                                                       list_grabbers_publications_days[index_grabber])
-
                 if days_publication_line:
-
-                    if  days_publication_line[0].text.find("hoy") != -1:
-                        period = "dia"
-                        quantity = 1
-                    elif days_publication_line[0].text.find("semana") != -1:
-                        period = "dia"
-                        quantity = 7
-
+                    if  days_publication_line[0].text.find("publicado") != -1 or days_publication_line[0].text.find("Publicado") != -1:
+                        if  days_publication_line[0].text.find("hoy") != -1:
+                            period = "dia"
+                            quantity = 1
+                        elif days_publication_line[0].text.find("semana") != -1:
+                            period = "dia"
+                            quantity = 7
+                        else:
+                            quantity = int(self.find_next_string(days_publication_line[0].text, "hace"))
+                            period = self.find_next_string(days_publication_line[0].text, str(quantity))
+                        break
                     else:
-                        quantity = int(self.find_next_string(days_publication_line[0].text, "hace"))
-                        period = self.find_next_string(days_publication_line[0].text, str(quantity))
-                    break
+                        index_grabber += 1
                 else:
                     index_grabber += 1
             else:
