@@ -44,7 +44,7 @@ WSPI.start_download(selected_mapID=1)
 
 For a deeper understanding, you can refer to my article where I train a machine learning model using the data.
 
-## [Article: ML for real estate](https://github.com/NEOZRO/portal_inmobiliario_web_scraper)
+## [Article: ML for real estate](https://neozro.github.io/project_1_portal_inmobiliario.html)
 
 
 
